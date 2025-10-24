@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+  build:
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_name: agentless-monitor-linux-x86_64
+            asset_ext: ""
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset_name: agentless-monitor-linux-aarch64
+            asset_ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: agentless-monitor-windows-x86_64
+            asset_ext: ".exe"
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset_name: agentless-monitor-macos-x86_64
+            asset_ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset_name: agentless-monitor-macos-aarch64
+            asset_ext: ""
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Build
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          strip target/${{ matrix.target }}/release/agentless-monitor${{ matrix.asset_ext }}
+
+      - name: Create archive
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a ${{ matrix.asset_name }}.zip target/${{ matrix.target }}/release/agentless-monitor${{ matrix.asset_ext }}
+          else
+            tar -czf ${{ matrix.asset_name }}.tar.gz -C target/${{ matrix.target }}/release agentless-monitor${{ matrix.asset_ext }}
+          fi
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: ${{ matrix.asset_name }}.${{ matrix.os == 'windows-latest' && 'zip' || 'tar.gz' }}
+
+  build-checksums:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all assets
+        run: |
+          # Get the latest release assets
+          ASSETS=$(gh api repos/${{ github.repository }}/releases/latest --jq '.assets[].browser_download_url')
+          
+          # Download each asset
+          for asset in $ASSETS; do
+            filename=$(basename "$asset")
+            wget "$asset" -O "$filename"
+          done
+
+      - name: Generate checksums
+        run: |
+          # Generate SHA256 checksums
+          sha256sum *.tar.gz *.zip > checksums.txt
+          
+          # Display checksums
+          cat checksums.txt
+
+      - name: Upload checksums
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: checksums.txt
+
+  notify:
+    needs: [create-release, build, build-checksums]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify on success
+        if: needs.create-release.result == 'success' && needs.build.result == 'success' && needs.build-checksums.result == 'success'
+        run: |
+          echo "✅ Release ${{ github.ref_name }} created successfully!"
+          echo "📦 Binaries built for multiple platforms"
+          echo "🔐 Checksums generated and uploaded"

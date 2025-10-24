@@ -28,3 +28,11 @@ servers.json
 # Temporary files
 *.tmp
 *.temp
+
+# Release artifacts
+*.tar.gz
+*.zip
+checksums.txt
+
+# CI/CD
+.github/workflows/*.yml.bak
