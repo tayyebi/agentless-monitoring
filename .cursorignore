@@ -1,23 +1,21 @@
-# Rust
+# Dependencies
 /target/
-**/*.rs.bk
 Cargo.lock
+
+# Generated files
+*.rs.bk
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Application specific
-data/
+# Application data
+/data/
 config.json
-servers.json
 *.log
 
 # Environment

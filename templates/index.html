@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentless Monitor</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1><i class="fas fa-server"></i> Agentless Monitor</h1>
+            <div class="header-controls">
+                <div class="ssh-info">
+                    <i class="fas fa-cog"></i> SSH Config: ~/.ssh/config
+                </div>
+            </div>
+        </header>
+
+        <main class="main">
+            <div class="servers-container" id="serversContainer">
+                <!-- Servers will be loaded here -->
+            </div>
+        </main>
+
+        <footer class="footer">
+            <div class="footer-content">
+                <div class="footer-left">
+                    <p>&copy; 2024 Agentless Monitor</p>
+                </div>
+                <div class="footer-center">
+                    <div class="connection-stats" id="connectionStats" onclick="app.showConnectionPoolDetails()" style="cursor: pointer;" title="Click for connection pool details">
+                        <span class="stat-item">
+                            <i class="fas fa-plug"></i>
+                            <span id="activeConnections">0</span> active
+                        </span>
+                        <span class="stat-item">
+                            <i class="fas fa-clock"></i>
+                            <span id="oldestConnection">-</span> oldest
+                        </span>
+                        <span class="stat-item">
+                            <i class="fas fa-sync"></i>
+                            <span id="youngestConnection">-</span> newest
+                        </span>
+                    </div>
+                </div>
+                <div class="footer-right">
+                    <a href="#" onclick="clearSecrets()" class="clear-secrets-link">
+                        <i class="fas fa-trash"></i> Clear Stored Passwords
+                    </a>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+
+    <!-- Server Details Modal -->
+    <div id="serverDetailsModal" class="modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2 id="serverDetailsTitle">Server Details</h2>
+                <span class="close" onclick="closeServerDetailsModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="tabs">
+                    <button class="tab-button active" onclick="showTab('overview')">Overview</button>
+                    <button class="tab-button" onclick="showTab('cpu')">CPU</button>
+                    <button class="tab-button" onclick="showTab('memory')">Memory</button>
+                    <button class="tab-button" onclick="showTab('disks')">Disks</button>
+                    <button class="tab-button" onclick="showTab('network')">Network</button>
+                    <button class="tab-button" onclick="showTab('ports')">Ports</button>
+                    <button class="tab-button" onclick="showTab('ping')">Ping Tests</button>
+                    <button class="tab-button" onclick="showTab('history')">History</button>
+                </div>
+                <div id="tabContent">
+                    <!-- Tab content will be loaded here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Password Prompt Modal -->
+    <div id="passwordModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="passwordModalTitle">SSH Password Required</h2>
+                <span class="close" onclick="closePasswordModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="password-form">
+                    <p id="passwordModalMessage">Please enter the password for <strong id="passwordServerName"></strong>:</p>
+                    <div class="form-group">
+                        <label for="passwordInput">Password:</label>
+                        <input type="password" id="passwordInput" placeholder="Enter SSH password" autocomplete="current-password">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="rememberPassword"> Remember this password
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn btn-primary" onclick="submitPassword()">Connect</button>
+                        <button class="btn btn-secondary" onclick="closePasswordModal()">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Connection Pool Details Modal -->
+    <div id="connectionPoolModal" class="modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2>Connection Pool Details</h2>
+                <span class="close" onclick="closeConnectionPoolModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="connectionPoolContent">
+                    <div class="loading-container">
+                        <div class="loading-spinner"></div>
+                        <div>Loading connection details...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
