@@ -529,17 +529,7 @@ impl MonitoringService {
 
     // Local data collection functions (no SSH required)
     async fn get_local_cpu_info() -> Result<CpuInfo> {
-        use std::process::Command;
-        
-        let output = Command::new("cat")
-            .arg("/proc/stat")
-            .output()?;
-        
-        if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to read /proc/stat"));
-        }
-        
-        let output_str = String::from_utf8(output.stdout)?;
+        let output_str = tokio::fs::read_to_string("/proc/stat").await?;
         let lines: Vec<&str> = output_str.lines().collect();
         let cpu_line = lines.get(0).ok_or_else(|| anyhow::anyhow!("No CPU line found"))?;
         
@@ -561,9 +551,7 @@ impl MonitoringService {
                 0.0
             };
 
-            // Get load average
-            let load_output = Command::new("cat").arg("/proc/loadavg").output()?;
-            let load_str = String::from_utf8(load_output.stdout)?;
+            let load_str = tokio::fs::read_to_string("/proc/loadavg").await.unwrap_or_default();
             let load_parts: Vec<&str> = load_str.split_whitespace().collect();
             let load_average = [
                 load_parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(0.0),
@@ -571,19 +559,14 @@ impl MonitoringService {
                 load_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.0),
             ];
 
-            // Get CPU cores
-            let cores_output = Command::new("nproc").output()?;
+            let cores_output = tokio::process::Command::new("nproc").output().await?;
             let cores = String::from_utf8(cores_output.stdout)?
                 .trim()
                 .parse()
                 .unwrap_or(1);
 
-            // Get CPU model
-            let model_output = Command::new("cat")
-                .arg("/proc/cpuinfo")
-                .output()?;
-            let model_str = String::from_utf8(model_output.stdout)?;
-            let model = model_str
+            let cpuinfo_str = tokio::fs::read_to_string("/proc/cpuinfo").await.unwrap_or_default();
+            let model = cpuinfo_str
                 .lines()
                 .find(|line| line.starts_with("model name"))
                 .and_then(|line| line.split(':').nth(1))
@@ -602,14 +585,7 @@ impl MonitoringService {
     }
 
     async fn get_local_memory_info() -> Result<MemoryInfo> {
-        use std::process::Command;
-        
-        let output = Command::new("cat").arg("/proc/meminfo").output()?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to read /proc/meminfo"));
-        }
-        
-        let output_str = String::from_utf8(output.stdout)?;
+        let output_str = tokio::fs::read_to_string("/proc/meminfo").await?;
         let mut mem = MemoryInfo {
             total: 0,
             used: 0,
@@ -643,12 +619,11 @@ impl MonitoringService {
     }
 
     async fn get_local_disk_info() -> Result<Vec<DiskInfo>> {
-        use std::process::Command;
-        
-        let output = Command::new("df")
+        let output = tokio::process::Command::new("df")
             .arg("-h")
             .arg("--output=source,target,fstype,size,used,avail,pcent")
-            .output()?;
+            .output()
+            .await?;
         
         if !output.status.success() {
             return Err(anyhow::anyhow!("Failed to run df command"));
@@ -691,14 +666,7 @@ impl MonitoringService {
     }
 
     async fn get_local_network_info() -> Result<Vec<NetworkInfo>> {
-        use std::process::Command;
-        
-        let output = Command::new("cat").arg("/proc/net/dev").output()?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to read /proc/net/dev"));
-        }
-        
-        let output_str = String::from_utf8(output.stdout)?;
+        let output_str = tokio::fs::read_to_string("/proc/net/dev").await?;
         let mut networks = Vec::new();
         
         for line in output_str.lines().skip(2) {
@@ -729,11 +697,10 @@ impl MonitoringService {
     }
 
     async fn get_local_port_info() -> Result<Vec<PortInfo>> {
-        use std::process::Command;
-        
-        let output = Command::new("ss")
+        let output = tokio::process::Command::new("ss")
             .arg("-tuln")
-            .output()?;
+            .output()
+            .await?;
         
         if !output.status.success() {
             return Err(anyhow::anyhow!("Failed to run ss command"));
@@ -765,46 +732,46 @@ impl MonitoringService {
     }
 
     async fn get_local_system_info() -> Result<SystemInfo> {
-        use std::process::Command;
-        
-        let hostname = Command::new("hostname")
+        let hostname = tokio::process::Command::new("hostname")
             .output()
+            .await
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .unwrap_or_default()
             .trim()
             .to_string();
         
-        let os = Command::new("uname")
+        let os = tokio::process::Command::new("uname")
             .arg("-s")
             .output()
+            .await
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .unwrap_or_default()
             .trim()
             .to_string();
         
-        let kernel = Command::new("uname")
+        let kernel = tokio::process::Command::new("uname")
             .arg("-r")
             .output()
+            .await
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .unwrap_or_default()
             .trim()
             .to_string();
         
-        let uptime = Command::new("cat")
-            .arg("/proc/uptime")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| s.split_whitespace().next().map(|s| s.to_string()))
+        let uptime_str = tokio::fs::read_to_string("/proc/uptime").await.unwrap_or_default();
+        let uptime = uptime_str
+            .split_whitespace()
+            .next()
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0) as u64;
         
-        let architecture = Command::new("uname")
+        let architecture = tokio::process::Command::new("uname")
             .arg("-m")
             .output()
+            .await
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .unwrap_or_default()
@@ -821,7 +788,6 @@ impl MonitoringService {
     }
 
     async fn run_local_ping_tests() -> Result<Vec<PingTest>> {
-        
         let targets = vec![
             "8.8.8.8",
             "1.1.1.1",
@@ -829,27 +795,36 @@ impl MonitoringService {
             "github.com",
         ];
         
+        // Run all pings concurrently with timeout
+        let mut handles = Vec::new();
+        for target in &targets {
+            let t = target.to_string();
+            handles.push(tokio::spawn(async move {
+                Self::ping_local_target(&t).await
+            }));
+        }
+
         let mut ping_tests = Vec::new();
-        
-        for target in targets {
-            let ping_result = Self::ping_local_target(target).await;
-            ping_tests.push(ping_result);
+        for handle in handles {
+            match handle.await {
+                Ok(result) => ping_tests.push(result),
+                Err(_) => {}
+            }
         }
         
         Ok(ping_tests)
     }
 
     async fn ping_local_target(target: &str) -> PingTest {
-        use std::process::Command;
-        
-        let command = format!("ping -c 1 -W 5 {}", target);
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .output();
-        
-        match output {
-            Ok(output) => {
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(3),
+            tokio::process::Command::new("ping")
+                .args(["-c", "1", "-W", "2", target])
+                .output()
+        ).await;
+
+        match result {
+            Ok(Ok(output)) => {
                 let output_str = String::from_utf8_lossy(&output.stdout);
                 if let Some(latency) = Self::extract_ping_latency(&output_str) {
                     PingTest {
@@ -867,11 +842,17 @@ impl MonitoringService {
                     }
                 }
             }
-            Err(e) => PingTest {
+            Ok(Err(e)) => PingTest {
                 target: target.to_string(),
                 latency_ms: None,
                 success: false,
                 error: Some(e.to_string()),
+            },
+            Err(_) => PingTest {
+                target: target.to_string(),
+                latency_ms: None,
+                success: false,
+                error: Some("Ping timed out".to_string()),
             },
         }
     }

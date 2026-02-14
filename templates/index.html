@@ -12,6 +12,9 @@
         <header class="header">
             <h1><i class="fas fa-server"></i> Agentless Monitor</h1>
             <div class="header-controls">
+                <button class="btn btn-secondary btn-small" onclick="app.showJobsPanel()" title="View monitoring jobs">
+                    <i class="fas fa-tasks"></i> Jobs
+                </button>
                 <div class="ssh-info">
                     <i class="fas fa-cog"></i> SSH Config: ~/.ssh/config
                 </div>
@@ -120,6 +123,29 @@
                     <div class="loading-container">
                         <div class="loading-spinner"></div>
                         <div>Loading connection details...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Jobs Control Panel Modal -->
+    <div id="jobsPanelModal" class="modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2><i class="fas fa-tasks"></i> Monitoring Jobs</h2>
+                <span class="close" onclick="closeJobsPanel()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="jobs-controls">
+                    <button class="btn btn-secondary btn-small" onclick="app.refreshJobs()">
+                        <i class="fas fa-sync"></i> Refresh
+                    </button>
+                </div>
+                <div id="jobsPanelContent">
+                    <div class="loading-container">
+                        <div class="loading-spinner"></div>
+                        <div>Loading jobs...</div>
                     </div>
                 </div>
             </div>

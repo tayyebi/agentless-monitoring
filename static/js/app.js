@@ -1125,6 +1125,131 @@ class MonitorApp {
         document.getElementById('connectionPoolModal').style.display = 'none';
     }
 
+    // Jobs Control Panel
+    async showJobsPanel() {
+        document.getElementById('jobsPanelModal').style.display = 'block';
+        await this.refreshJobs();
+    }
+
+    closeJobsPanel() {
+        document.getElementById('jobsPanelModal').style.display = 'none';
+    }
+
+    async refreshJobs() {
+        const content = document.getElementById('jobsPanelContent');
+        content.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div><div>Loading jobs...</div></div>';
+
+        try {
+            const response = await fetch('/api/jobs?limit=50');
+            if (!response.ok) throw new Error('Failed to load jobs');
+            const data = await response.json();
+            this.renderJobsPanel(data);
+        } catch (error) {
+            content.innerHTML = `<div class="error-container"><i class="fas fa-exclamation-triangle"></i><p>Error loading jobs: ${error.message}</p></div>`;
+        }
+    }
+
+    async toggleServerMonitoring(serverId, currentlyPaused) {
+        const endpoint = currentlyPaused
+            ? `/api/servers/${serverId}/start-monitoring`
+            : `/api/servers/${serverId}/stop-monitoring`;
+
+        try {
+            const response = await fetch(endpoint, { method: 'POST' });
+            if (!response.ok) throw new Error('Failed to toggle monitoring');
+            this.showNotification(
+                currentlyPaused ? `Monitoring resumed for ${serverId}` : `Monitoring paused for ${serverId}`,
+                'success'
+            );
+            await this.refreshJobs();
+        } catch (error) {
+            this.showNotification(`Error: ${error.message}`, 'error');
+        }
+    }
+
+    renderJobsPanel(data) {
+        const { jobs, paused_servers } = data;
+        const pausedSet = new Set(paused_servers || []);
+
+        const getStatusIcon = (status) => {
+            switch (status) {
+                case 'Completed': return '<i class="fas fa-check-circle" style="color: #28a745;"></i>';
+                case 'Running': return '<i class="fas fa-spinner fa-spin" style="color: #007bff;"></i>';
+                case 'Failed': return '<i class="fas fa-times-circle" style="color: #dc3545;"></i>';
+                case 'Pending': return '<i class="fas fa-clock" style="color: #ffc107;"></i>';
+                case 'Paused': return '<i class="fas fa-pause-circle" style="color: #6c757d;"></i>';
+                default: return '<i class="fas fa-question-circle"></i>';
+            }
+        };
+
+        const formatDuration = (ms) => {
+            if (!ms && ms !== 0) return '-';
+            if (ms < 1000) return `${ms}ms`;
+            return `${(ms / 1000).toFixed(1)}s`;
+        };
+
+        const formatTime = (ts) => {
+            if (!ts) return '-';
+            const d = new Date(ts);
+            return d.toLocaleTimeString();
+        };
+
+        // Server control section
+        const serverControls = this.servers.map(server => {
+            const isPaused = pausedSet.has(server.id);
+            return `
+                <div class="job-server-control">
+                    <span class="job-server-name">${server.name}</span>
+                    <span class="job-server-status ${isPaused ? 'paused' : 'active'}">${isPaused ? 'Paused' : 'Active'}</span>
+                    <button class="btn ${isPaused ? 'btn-primary' : 'btn-warning'} btn-small" 
+                            onclick="app.toggleServerMonitoring('${server.id}', ${isPaused})">
+                        <i class="fas fa-${isPaused ? 'play' : 'pause'}"></i> ${isPaused ? 'Resume' : 'Pause'}
+                    </button>
+                </div>`;
+        }).join('');
+
+        // Jobs table
+        const jobRows = (jobs || []).map(job => `
+            <tr class="job-row job-status-${job.status.toLowerCase()}">
+                <td>${getStatusIcon(job.status)} ${job.status}</td>
+                <td>${job.server_name}</td>
+                <td>${job.job_type}</td>
+                <td>${formatTime(job.created_at)}</td>
+                <td>${formatDuration(job.duration_ms)}</td>
+                <td>${job.metrics_collected && job.metrics_collected.length > 0 ? job.metrics_collected.join(', ') : '-'}</td>
+                <td class="job-error">${job.error ? `<span title="${job.error}">${job.error.substring(0, 40)}${job.error.length > 40 ? '...' : ''}</span>` : '-'}</td>
+            </tr>
+        `).join('');
+
+        document.getElementById('jobsPanelContent').innerHTML = `
+            <div class="jobs-panel">
+                <div class="jobs-server-controls">
+                    <h3><i class="fas fa-server"></i> Server Monitoring Controls</h3>
+                    <div class="server-controls-list">${serverControls}</div>
+                </div>
+                <div class="jobs-table-section">
+                    <h3><i class="fas fa-history"></i> Recent Jobs (${jobs ? jobs.length : 0})</h3>
+                    <div class="jobs-table-wrapper">
+                        <table class="jobs-table">
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Server</th>
+                                    <th>Type</th>
+                                    <th>Time</th>
+                                    <th>Duration</th>
+                                    <th>Metrics</th>
+                                    <th>Error</th>
+                                </tr>
+                            </thead>
+                            <tbody>${jobRows || '<tr><td colspan="7" style="text-align:center;">No jobs yet</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
     renderConnectionPoolDetails(data) {
         const formatAge = (seconds) => {
             if (seconds === 0) return 'Now';
@@ -1302,6 +1427,10 @@ function showTab(tabName) {
 
 function closeConnectionPoolModal() {
     app.closeConnectionPoolModal();
+}
+
+function closeJobsPanel() {
+    app.closeJobsPanel();
 }
 
 // Initialize app when DOM is loaded
