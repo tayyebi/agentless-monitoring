@@ -5,7 +5,8 @@ use std::sync::Arc;
 use tracing::{info, warn, error};
 
 use crate::models::{
-    CpuInfo, DiskInfo, MemoryInfo, MonitoringData, NetworkInfo, PingTest, PortInfo, SystemInfo, Server, AppState,
+    CpuInfo, DiskInfo, MemoryInfo, MonitoringData, NetworkInfo, PingTest, PortInfo, SystemInfo,
+    Server, AppState, MonitoringJob, JobType, JobStatus,
 };
 use crate::ssh::SshConnectionManager;
 
@@ -21,32 +22,64 @@ impl MonitoringService {
         let server_id = server.id.clone();
         let mut error_messages = vec![];
 
-        // Collect monitoring data sequentially
-        let cpu = match Self::get_cpu_info(ssh_manager, server).await {
-            Ok(cpu) => cpu,
-            Err(e) => { error_messages.push(format!("CPU: {}", e)); CpuInfo { usage_percent: 0.0, load_average: [0.0, 0.0, 0.0], cores: 0, model: String::new() } }
+        // Optimized: combine CPU, memory, load, cores, and model into a single SSH command
+        let combined_cmd = "cat /proc/stat | head -1; echo '---SEPARATOR---'; cat /proc/loadavg; echo '---SEPARATOR---'; nproc; echo '---SEPARATOR---'; cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d: -f2; echo '---SEPARATOR---'; cat /proc/meminfo";
+        let (cpu, memory) = match ssh_manager.execute_command(server, combined_cmd).await {
+            Ok(output) => {
+                let sections: Vec<&str> = output.split("---SEPARATOR---").collect();
+                let cpu = Self::parse_combined_cpu(sections.as_slice());
+                let mem = if sections.len() >= 5 {
+                    Self::parse_meminfo(sections[4]).unwrap_or_else(|_| MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 })
+                } else {
+                    MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 }
+                };
+                (cpu, mem)
+            }
+            Err(e) => {
+                error_messages.push(format!("CPU/Memory: {}", e));
+                (CpuInfo { usage_percent: 0.0, load_average: [0.0, 0.0, 0.0], cores: 0, model: String::new() },
+                 MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 })
+            }
         };
-        let memory = match Self::get_memory_info(ssh_manager, server).await {
-            Ok(mem) => mem,
-            Err(e) => { error_messages.push(format!("Memory: {}", e)); MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 } }
+
+        // Optimized: combine disk and network into a single SSH command
+        let disk_net_cmd = "df -h; echo '---SEPARATOR---'; cat /proc/net/dev";
+        let (disks, network) = match ssh_manager.execute_command(server, disk_net_cmd).await {
+            Ok(output) => {
+                let sections: Vec<&str> = output.split("---SEPARATOR---").collect();
+                let d = if !sections.is_empty() { Self::parse_df_output(sections[0]).unwrap_or_default() } else { Vec::new() };
+                let n = if sections.len() >= 2 { Self::parse_net_dev(sections[1]).unwrap_or_default() } else { Vec::new() };
+                (d, n)
+            }
+            Err(e) => {
+                error_messages.push(format!("Disk/Network: {}", e));
+                (Vec::new(), Vec::new())
+            }
         };
-        let disks = match Self::get_disk_info(ssh_manager, server).await {
-            Ok(d) => d,
-            Err(e) => { error_messages.push(format!("Disks: {}", e)); Vec::new() }
+
+        // Optimized: combine system info into a single SSH command
+        let sys_cmd = "hostname; echo '---SEPARATOR---'; uname -s; echo '---SEPARATOR---'; uname -r; echo '---SEPARATOR---'; cat /proc/uptime; echo '---SEPARATOR---'; uname -m";
+        let system_info = match ssh_manager.execute_command(server, sys_cmd).await {
+            Ok(output) => {
+                let sections: Vec<&str> = output.split("---SEPARATOR---").collect();
+                SystemInfo {
+                    hostname: sections.first().unwrap_or(&"").trim().to_string(),
+                    os: sections.get(1).unwrap_or(&"").trim().to_string(),
+                    kernel: sections.get(2).unwrap_or(&"").trim().to_string(),
+                    uptime: sections.get(3).unwrap_or(&"").trim().split_whitespace().next().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0) as u64,
+                    architecture: sections.get(4).unwrap_or(&"").trim().to_string(),
+                }
+            }
+            Err(e) => { error_messages.push(format!("System: {}", e)); SystemInfo { hostname: String::new(), os: String::new(), kernel: String::new(), uptime: 0, architecture: String::new() } }
         };
-        let network = match Self::get_network_info(ssh_manager, server).await {
-            Ok(n) => n,
-            Err(e) => { error_messages.push(format!("Network: {}", e)); Vec::new() }
-        };
+
         let ports = match Self::get_port_info(ssh_manager, server).await {
             Ok(p) => p,
             Err(e) => { error_messages.push(format!("Ports: {}", e)); Vec::new() }
         };
-        let system_info = match Self::get_system_info(ssh_manager, server).await {
-            Ok(s) => s,
-            Err(e) => { error_messages.push(format!("System: {}", e)); SystemInfo { hostname: String::new(), os: String::new(), kernel: String::new(), uptime: 0, architecture: String::new() } }
-        };
-        let ping_tests = match Self::run_ping_tests(ssh_manager, server).await {
+
+        // Optimized: combine ping tests into a single SSH command
+        let ping_tests = match Self::run_ping_tests_combined(ssh_manager, server).await {
             Ok(p) => p,
             Err(e) => { error_messages.push(format!("Ping: {}", e)); Vec::new() }
         };
@@ -65,7 +98,6 @@ impl MonitoringService {
 
         if !error_messages.is_empty() {
             warn!("⚠️ Encountered {} errors during monitoring: {}", error_messages.len(), error_messages.join(" | "));
-            // If we have too many errors, return an error instead of partial data
             if error_messages.len() >= 3 {
                 let error = error_messages.join(" | ");
                 return Err(anyhow::anyhow!(error));
@@ -73,6 +105,32 @@ impl MonitoringService {
         }
 
         Ok(data)
+    }
+
+    fn parse_combined_cpu(sections: &[&str]) -> CpuInfo {
+        let mut usage_percent = 0.0;
+        let mut load_average = [0.0, 0.0, 0.0];
+        let mut cores: u32 = 1;
+        let mut model = String::new();
+
+        if !sections.is_empty() {
+            if let Ok(parsed) = Self::parse_cpu_usage(sections[0]) {
+                usage_percent = parsed;
+            }
+        }
+        if sections.len() >= 2 {
+            if let Ok(load) = Self::parse_load_average(sections[1].trim()) {
+                load_average = load;
+            }
+        }
+        if sections.len() >= 3 {
+            cores = sections[2].trim().parse().unwrap_or(1);
+        }
+        if sections.len() >= 4 {
+            model = sections[3].trim().to_string();
+        }
+
+        CpuInfo { usage_percent, load_average, cores, model }
     }
 
     async fn collect_local_data() -> Result<MonitoringData> {
@@ -140,15 +198,53 @@ impl MonitoringService {
             };
             
             for (_, server) in servers.iter() {
+                // Skip paused servers
+                if app_state.is_server_paused(&server.id) {
+                    continue;
+                }
+
                 let now = chrono::Utc::now().timestamp() as u64;
                 if server.next_monitoring <= now {
                     let server = server.clone();
                     let ssh_manager = ssh_manager.clone();
                     let app_state = app_state.clone();
                     
+                    // Create a job for this monitoring task
+                    let job_id = uuid::Uuid::new_v4().to_string();
+                    let job = MonitoringJob {
+                        id: job_id.clone(),
+                        server_id: server.id.clone(),
+                        server_name: server.name.clone(),
+                        job_type: JobType::FullCollection,
+                        status: JobStatus::Pending,
+                        created_at: chrono::Utc::now(),
+                        started_at: None,
+                        completed_at: None,
+                        duration_ms: None,
+                        error: None,
+                        metrics_collected: Vec::new(),
+                    };
+                    app_state.add_job(job);
+
                     tokio::spawn(async move {
-                        if let Err(e) = Self::monitor_server(&ssh_manager, &server, &app_state).await {
-                            error!("❌ Failed to monitor server {}: {}", server.id, e);
+                        let start = std::time::Instant::now();
+                        app_state.update_job_status(&job_id, JobStatus::Running, None, None, None);
+
+                        match Self::monitor_server(&ssh_manager, &server, &app_state).await {
+                            Ok(_) => {
+                                let duration = start.elapsed().as_millis() as u64;
+                                let metrics = vec![
+                                    "cpu".to_string(), "memory".to_string(), "disks".to_string(),
+                                    "network".to_string(), "ports".to_string(), "system".to_string(),
+                                    "ping".to_string(),
+                                ];
+                                app_state.update_job_status(&job_id, JobStatus::Completed, None, Some(duration), Some(metrics));
+                            }
+                            Err(e) => {
+                                let duration = start.elapsed().as_millis() as u64;
+                                error!("❌ Failed to monitor server {}: {}", server.id, e);
+                                app_state.update_job_status(&job_id, JobStatus::Failed, Some(e.to_string()), Some(duration), None);
+                            }
                         }
                     });
                 }
@@ -207,306 +303,6 @@ impl MonitoringService {
         Ok(())
     }
 
-    async fn get_cpu_info(ssh_manager: &SshConnectionManager, server: &Server) -> Result<CpuInfo> {
-        // Try multiple commands for different Linux distributions
-        let commands = vec![
-            "cat /proc/stat | head -1",
-            "top -bn1 | grep \"Cpu(s)\"",
-            "vmstat 1 1 | tail -1",
-        ];
-
-        let mut cpu_usage = 0.0;
-        let mut load_average = [0.0, 0.0, 0.0];
-        let mut cores = 1;
-        let mut found_cpu_data = false;
-
-        for cmd in commands {
-            if let Ok(output) = ssh_manager.execute_command(server, cmd).await {
-                if let Ok(parsed) = Self::parse_cpu_usage(&output) {
-                    cpu_usage = parsed;
-                    found_cpu_data = true;
-                    break;
-                }
-            }
-        }
-
-        if !found_cpu_data {
-            return Err(anyhow::anyhow!("Failed to get CPU usage from any command"));
-        }
-
-        // Get load average
-        if let Ok(output) = ssh_manager.execute_command(server, "cat /proc/loadavg").await {
-            if let Ok(load) = Self::parse_load_average(&output) {
-                load_average = load;
-            }
-        }
-
-        // Get CPU cores
-        if let Ok(output) = ssh_manager.execute_command(server, "nproc").await {
-            cores = output.trim().parse().unwrap_or(1);
-        }
-
-        // Get CPU model
-        let model = ssh_manager
-            .execute_command(server, "cat /proc/cpuinfo | grep \"model name\" | head -1 | cut -d: -f2")
-            .await
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        Ok(CpuInfo {
-            usage_percent: cpu_usage,
-            load_average,
-            cores: cores as u32,
-            model,
-        })
-    }
-
-    fn parse_cpu_usage(output: &str) -> Result<f64> {
-        let re = Regex::new(r"cpu\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")?;
-        if let Some(caps) = re.captures(output) {
-            let user: u64 = caps.get(1).unwrap().as_str().parse()?;
-            let nice: u64 = caps.get(2).unwrap().as_str().parse()?;
-            let system: u64 = caps.get(3).unwrap().as_str().parse()?;
-            let idle: u64 = caps.get(4).unwrap().as_str().parse()?;
-            let iowait: u64 = caps.get(5).unwrap().as_str().parse()?;
-            let irq: u64 = caps.get(6).unwrap().as_str().parse()?;
-            let softirq: u64 = caps.get(7).unwrap().as_str().parse()?;
-
-            let total = user + nice + system + idle + iowait + irq + softirq;
-            let used = total - idle;
-            let usage = (used as f64 / total as f64) * 100.0;
-            return Ok(usage);
-        }
-
-        // Try parsing from top command
-        let re = Regex::new(r"Cpu\(s\):\s+(\d+\.?\d*)%us")?;
-        if let Some(caps) = re.captures(output) {
-            return Ok(caps.get(1).unwrap().as_str().parse()?);
-        }
-
-        Err(anyhow::anyhow!("Could not parse CPU usage"))
-    }
-
-    fn parse_load_average(output: &str) -> Result<[f64; 3]> {
-        let parts: Vec<&str> = output.split_whitespace().collect();
-        if parts.len() >= 3 {
-            Ok([
-                parts[0].parse()?,
-                parts[1].parse()?,
-                parts[2].parse()?,
-            ])
-        } else {
-            Ok([0.0, 0.0, 0.0])
-        }
-    }
-
-    async fn get_memory_info(ssh_manager: &SshConnectionManager, server: &Server) -> Result<MemoryInfo> {
-        // Try /proc/meminfo first (Linux)
-        if let Ok(output) = ssh_manager.execute_command(server, "cat /proc/meminfo").await {
-            if let Ok(mem) = Self::parse_meminfo(&output) {
-                return Ok(mem);
-            }
-        }
-
-        // Try free command
-        if let Ok(output) = ssh_manager.execute_command(server, "free -b").await {
-            if let Ok(mem) = Self::parse_free_output(&output) {
-                return Ok(mem);
-            }
-        }
-
-        // If both commands failed, return an error
-        Err(anyhow::anyhow!("Failed to get memory information from any command"))
-    }
-
-    fn parse_meminfo(output: &str) -> Result<MemoryInfo> {
-        let mut mem = MemoryInfo {
-            total: 0,
-            used: 0,
-            free: 0,
-            available: 0,
-            swap_total: 0,
-            swap_used: 0,
-            swap_free: 0,
-        };
-
-        for line in output.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                if let Ok(value) = parts[1].parse::<u64>() {
-                    match parts[0] {
-                        "MemTotal:" => mem.total = value * 1024, // Convert from KB to bytes
-                        "MemFree:" => mem.free = value * 1024,
-                        "MemAvailable:" => mem.available = value * 1024,
-                        "SwapTotal:" => mem.swap_total = value * 1024,
-                        "SwapFree:" => mem.swap_free = value * 1024,
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        mem.used = mem.total - mem.free;
-        mem.swap_used = mem.swap_total - mem.swap_free;
-
-        Ok(mem)
-    }
-
-    fn parse_free_output(output: &str) -> Result<MemoryInfo> {
-        let lines: Vec<&str> = output.lines().collect();
-        if lines.len() < 2 {
-            return Err(anyhow::anyhow!("Invalid free command output"));
-        }
-
-        let mem_line: Vec<&str> = lines[1].split_whitespace().collect();
-        let swap_line: Vec<&str> = lines[2].split_whitespace().collect();
-
-        if mem_line.len() < 4 || swap_line.len() < 4 {
-            return Err(anyhow::anyhow!("Invalid free command output"));
-        }
-
-        Ok(MemoryInfo {
-            total: mem_line[1].parse()?,
-            used: mem_line[2].parse()?,
-            free: mem_line[3].parse()?,
-            available: mem_line[6].parse().unwrap_or(0),
-            swap_total: swap_line[1].parse()?,
-            swap_used: swap_line[2].parse()?,
-            swap_free: swap_line[3].parse()?,
-        })
-    }
-
-    async fn get_disk_info(ssh_manager: &SshConnectionManager, server: &Server) -> Result<Vec<DiskInfo>> {
-        // Try df command first
-        if let Ok(output) = ssh_manager.execute_command(server, "df -h").await {
-            if let Ok(disks) = Self::parse_df_output(&output) {
-                return Ok(disks);
-            }
-        }
-
-        // Try lsblk as fallback
-        if let Ok(output) = ssh_manager.execute_command(server, "lsblk -f").await {
-            if let Ok(disks) = Self::parse_lsblk_output(&output) {
-                return Ok(disks);
-            }
-        }
-
-        Ok(vec![])
-    }
-
-    fn parse_df_output(output: &str) -> Result<Vec<DiskInfo>> {
-        let mut disks = Vec::new();
-        let lines: Vec<&str> = output.lines().collect();
-
-        for line in lines.iter().skip(1) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 6 {
-                let device = parts[0].to_string();
-                let total = Self::parse_size(parts[1])?;
-                let used = Self::parse_size(parts[2])?;
-                let available = Self::parse_size(parts[3])?;
-                let usage_percent = parts[4].trim_end_matches('%').parse::<f64>()?;
-                let mount_point = parts[5].to_string();
-                let filesystem = if parts.len() > 6 { parts[6] } else { "unknown" };
-
-                disks.push(DiskInfo {
-                    device,
-                    mount_point,
-                    total,
-                    used,
-                    free: available,
-                    usage_percent,
-                    filesystem: filesystem.to_string(),
-                });
-            }
-        }
-
-        Ok(disks)
-    }
-
-    fn parse_lsblk_output(_output: &str) -> Result<Vec<DiskInfo>> {
-        // This is a simplified parser for lsblk output
-        // In a real implementation, you'd want to parse this more thoroughly
-        Ok(vec![])
-    }
-
-    fn parse_size(size_str: &str) -> Result<u64> {
-        let size_str = size_str.to_uppercase();
-        let (number, unit) = if size_str.ends_with("K") {
-            (size_str.trim_end_matches('K'), 1024)
-        } else if size_str.ends_with("M") {
-            (size_str.trim_end_matches('M'), 1024 * 1024)
-        } else if size_str.ends_with("G") {
-            (size_str.trim_end_matches('G'), 1024 * 1024 * 1024)
-        } else if size_str.ends_with("T") {
-            (size_str.trim_end_matches('T'), 1024_u64.pow(4))
-        } else {
-            (size_str.as_str(), 1)
-        };
-
-        let number: f64 = number.parse()?;
-        Ok((number * unit as f64) as u64)
-    }
-
-    async fn get_network_info(ssh_manager: &SshConnectionManager, server: &Server) -> Result<Vec<NetworkInfo>> {
-        // Try /proc/net/dev first
-        if let Ok(output) = ssh_manager.execute_command(server, "cat /proc/net/dev").await {
-            if let Ok(networks) = Self::parse_net_dev(&output) {
-                return Ok(networks);
-            }
-        }
-
-        // Try ifconfig as fallback
-        if let Ok(output) = ssh_manager.execute_command(server, "ifconfig").await {
-            if let Ok(networks) = Self::parse_ifconfig(&output) {
-                return Ok(networks);
-            }
-        }
-
-        Ok(vec![])
-    }
-
-    fn parse_net_dev(output: &str) -> Result<Vec<NetworkInfo>> {
-        let mut networks = Vec::new();
-        let lines: Vec<&str> = output.lines().collect();
-
-        for line in lines.iter().skip(2) {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 2 {
-                let interface = parts[0].trim().to_string();
-                let stats: Vec<&str> = parts[1].split_whitespace().collect();
-
-                if stats.len() >= 16 {
-                    let rx_bytes = stats[0].parse().unwrap_or(0);
-                    let rx_packets = stats[1].parse().unwrap_or(0);
-                    let rx_errors = stats[2].parse().unwrap_or(0);
-                    let tx_bytes = stats[8].parse().unwrap_or(0);
-                    let tx_packets = stats[9].parse().unwrap_or(0);
-                    let tx_errors = stats[10].parse().unwrap_or(0);
-
-                    networks.push(NetworkInfo {
-                        interface,
-                        rx_bytes,
-                        tx_bytes,
-                        rx_packets,
-                        tx_packets,
-                        rx_errors,
-                        tx_errors,
-                        ip_addresses: vec![], // Would need additional parsing
-                    });
-                }
-            }
-        }
-
-        Ok(networks)
-    }
-
-    fn parse_ifconfig(_output: &str) -> Result<Vec<NetworkInfo>> {
-        // Simplified ifconfig parser
-        Ok(vec![])
-    }
-
     async fn get_port_info(ssh_manager: &SshConnectionManager, server: &Server) -> Result<Vec<PortInfo>> {
         // Try netstat first
         if let Ok(output) = ssh_manager.execute_command(server, "netstat -tuln").await {
@@ -557,99 +353,169 @@ impl MonitoringService {
         Ok(vec![])
     }
 
-    async fn get_system_info(ssh_manager: &SshConnectionManager, server: &Server) -> Result<SystemInfo> {
-        let hostname = ssh_manager
-            .execute_command(server, "hostname")
-            .await
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        let os = ssh_manager
-            .execute_command(server, "uname -s")
-            .await
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        let kernel = ssh_manager
-            .execute_command(server, "uname -r")
-            .await
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        let uptime = ssh_manager
-            .execute_command(server, "cat /proc/uptime")
-            .await
-            .unwrap_or_default()
-            .split_whitespace()
-            .next()
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(0.0) as u64;
-
-        let architecture = ssh_manager
-            .execute_command(server, "uname -m")
-            .await
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        Ok(SystemInfo {
-            hostname,
-            os,
-            kernel,
-            uptime,
-            architecture,
-        })
-    }
-
-    async fn run_ping_tests(ssh_manager: &SshConnectionManager, server: &Server) -> Result<Vec<PingTest>> {
-        let targets = vec![
-            "8.8.8.8",      // Google DNS
-            "1.1.1.1",      // Cloudflare DNS
-            "google.com",    // Google
-            "github.com",    // GitHub
-        ];
+    async fn run_ping_tests_combined(ssh_manager: &SshConnectionManager, server: &Server) -> Result<Vec<PingTest>> {
+        let targets = ["8.8.8.8", "1.1.1.1", "google.com", "github.com"];
+        // Combine all ping commands into a single SSH call
+        let combined = targets.iter()
+            .map(|t| format!("ping -c 1 -W 3 {} 2>&1 || true", t))
+            .collect::<Vec<_>>()
+            .join("; echo '---PING_SEP---'; ");
 
         let mut ping_tests = Vec::new();
-
-        for target in targets {
-            let ping_result = Self::ping_target(ssh_manager, server, target).await;
-            ping_tests.push(ping_result);
-        }
-
-        Ok(ping_tests)
-    }
-
-    async fn ping_target(ssh_manager: &SshConnectionManager, server: &Server, target: &str) -> PingTest {
-        let command = format!("ping -c 1 -W 5 {}", target);
-        
-        match ssh_manager.execute_command(server, &command).await {
+        match ssh_manager.execute_command(server, &combined).await {
             Ok(output) => {
-                if let Some(latency) = Self::extract_ping_latency(&output) {
-                    PingTest {
-                        target: target.to_string(),
-                        latency_ms: Some(latency),
-                        success: true,
-                        error: None,
-                    }
-                } else {
-                    PingTest {
-                        target: target.to_string(),
-                        latency_ms: None,
-                        success: false,
-                        error: Some("Could not parse latency".to_string()),
+                let sections: Vec<&str> = output.split("---PING_SEP---").collect();
+                for (i, target) in targets.iter().enumerate() {
+                    let section = sections.get(i).unwrap_or(&"");
+                    if let Some(latency) = Self::extract_ping_latency(section) {
+                        ping_tests.push(PingTest { target: target.to_string(), latency_ms: Some(latency), success: true, error: None });
+                    } else {
+                        ping_tests.push(PingTest { target: target.to_string(), latency_ms: None, success: false, error: Some("No response".to_string()) });
                     }
                 }
             }
-            Err(e) => PingTest {
-                target: target.to_string(),
-                latency_ms: None,
-                success: false,
-                error: Some(e.to_string()),
-            },
+            Err(e) => {
+                for target in &targets {
+                    ping_tests.push(PingTest { target: target.to_string(), latency_ms: None, success: false, error: Some(e.to_string()) });
+                }
+            }
         }
+        Ok(ping_tests)
+    }
+
+    fn parse_cpu_usage(output: &str) -> Result<f64> {
+        let re = Regex::new(r"cpu\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")?;
+        if let Some(caps) = re.captures(output) {
+            let user: u64 = caps.get(1).unwrap().as_str().parse()?;
+            let nice: u64 = caps.get(2).unwrap().as_str().parse()?;
+            let system: u64 = caps.get(3).unwrap().as_str().parse()?;
+            let idle: u64 = caps.get(4).unwrap().as_str().parse()?;
+            let iowait: u64 = caps.get(5).unwrap().as_str().parse()?;
+            let irq: u64 = caps.get(6).unwrap().as_str().parse()?;
+            let softirq: u64 = caps.get(7).unwrap().as_str().parse()?;
+
+            let total = user + nice + system + idle + iowait + irq + softirq;
+            let used = total - idle;
+            let usage = (used as f64 / total as f64) * 100.0;
+            return Ok(usage);
+        }
+
+        let re = Regex::new(r"Cpu\(s\):\s+(\d+\.?\d*)%us")?;
+        if let Some(caps) = re.captures(output) {
+            return Ok(caps.get(1).unwrap().as_str().parse()?);
+        }
+
+        Err(anyhow::anyhow!("Could not parse CPU usage"))
+    }
+
+    fn parse_load_average(output: &str) -> Result<[f64; 3]> {
+        let parts: Vec<&str> = output.split_whitespace().collect();
+        if parts.len() >= 3 {
+            Ok([
+                parts[0].parse()?,
+                parts[1].parse()?,
+                parts[2].parse()?,
+            ])
+        } else {
+            Ok([0.0, 0.0, 0.0])
+        }
+    }
+
+    fn parse_meminfo(output: &str) -> Result<MemoryInfo> {
+        let mut mem = MemoryInfo {
+            total: 0, used: 0, free: 0, available: 0,
+            swap_total: 0, swap_used: 0, swap_free: 0,
+        };
+
+        for line in output.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let Ok(value) = parts[1].parse::<u64>() {
+                    match parts[0] {
+                        "MemTotal:" => mem.total = value * 1024,
+                        "MemFree:" => mem.free = value * 1024,
+                        "MemAvailable:" => mem.available = value * 1024,
+                        "SwapTotal:" => mem.swap_total = value * 1024,
+                        "SwapFree:" => mem.swap_free = value * 1024,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        mem.used = mem.total - mem.free;
+        mem.swap_used = mem.swap_total - mem.swap_free;
+        Ok(mem)
+    }
+
+    fn parse_df_output(output: &str) -> Result<Vec<DiskInfo>> {
+        let mut disks = Vec::new();
+        let lines: Vec<&str> = output.lines().collect();
+
+        for line in lines.iter().skip(1) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 6 {
+                let device = parts[0].to_string();
+                let total = Self::parse_size(parts[1])?;
+                let used = Self::parse_size(parts[2])?;
+                let available = Self::parse_size(parts[3])?;
+                let usage_percent = parts[4].trim_end_matches('%').parse::<f64>()?;
+                let mount_point = parts[5].to_string();
+                let filesystem = if parts.len() > 6 { parts[6] } else { "unknown" };
+
+                disks.push(DiskInfo {
+                    device, mount_point, total, used,
+                    free: available, usage_percent,
+                    filesystem: filesystem.to_string(),
+                });
+            }
+        }
+        Ok(disks)
+    }
+
+    fn parse_size(size_str: &str) -> Result<u64> {
+        let size_str = size_str.to_uppercase();
+        let (number, unit) = if size_str.ends_with("K") {
+            (size_str.trim_end_matches('K'), 1024)
+        } else if size_str.ends_with("M") {
+            (size_str.trim_end_matches('M'), 1024 * 1024)
+        } else if size_str.ends_with("G") {
+            (size_str.trim_end_matches('G'), 1024 * 1024 * 1024)
+        } else if size_str.ends_with("T") {
+            (size_str.trim_end_matches('T'), 1024_u64.pow(4))
+        } else {
+            (size_str.as_str(), 1)
+        };
+
+        let number: f64 = number.parse()?;
+        Ok((number * unit as f64) as u64)
+    }
+
+    fn parse_net_dev(output: &str) -> Result<Vec<NetworkInfo>> {
+        let mut networks = Vec::new();
+        let lines: Vec<&str> = output.lines().collect();
+
+        for line in lines.iter().skip(2) {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 2 {
+                let interface = parts[0].trim().to_string();
+                let stats: Vec<&str> = parts[1].split_whitespace().collect();
+
+                if stats.len() >= 16 {
+                    networks.push(NetworkInfo {
+                        interface,
+                        rx_bytes: stats[0].parse().unwrap_or(0),
+                        tx_bytes: stats[8].parse().unwrap_or(0),
+                        rx_packets: stats[1].parse().unwrap_or(0),
+                        tx_packets: stats[9].parse().unwrap_or(0),
+                        rx_errors: stats[2].parse().unwrap_or(0),
+                        tx_errors: stats[10].parse().unwrap_or(0),
+                        ip_addresses: vec![],
+                    });
+                }
+            }
+        }
+        Ok(networks)
     }
 
     fn extract_ping_latency(output: &str) -> Option<f64> {

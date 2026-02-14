@@ -75,6 +75,7 @@ async fn run_server(config_path: std::path::PathBuf) -> Result<()> {
         .route("/api/servers/:id/history", get(api::servers::get_server_history))
         .route("/api/servers/:id/start-monitoring", post(api::servers::start_monitoring))
         .route("/api/servers/:id/stop-monitoring", post(api::servers::stop_monitoring))
+        .route("/api/jobs", get(api::servers::list_jobs))
         .route("/api/connection-stats", get(api::servers::get_connection_stats))
         .route("/api/connection-pool", get(api::servers::get_connection_pool_details))
         .route("/api/config-info", get(api::servers::get_config_info))
