@@ -450,11 +450,11 @@ pub async fn get_server_history(
 }
 
 pub async fn start_monitoring(
-    State(_state): State<std::sync::Arc<AppState>>,
+    State(state): State<std::sync::Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    // This would start a background monitoring task
-    // For now, we'll just return success
+    // Resume monitoring for the server
+    state.resume_server(&id);
     Ok(Json(json!({
         "message": "Monitoring started",
         "server_id": id
@@ -462,14 +462,36 @@ pub async fn start_monitoring(
 }
 
 pub async fn stop_monitoring(
-    State(_state): State<std::sync::Arc<AppState>>,
+    State(state): State<std::sync::Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    // This would stop the background monitoring task
-    // For now, we'll just return success
+    // Pause monitoring for the server
+    state.pause_server(&id);
     Ok(Json(json!({
         "message": "Monitoring stopped",
         "server_id": id
+    })))
+}
+
+pub async fn list_jobs(
+    State(state): State<std::sync::Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, StatusCode> {
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(50);
+
+    let jobs = state.get_jobs(limit);
+
+    let paused_servers: Vec<String> = {
+        let paused = state.paused_servers.read().unwrap();
+        paused.iter().cloned().collect()
+    };
+
+    Ok(Json(json!({
+        "jobs": jobs,
+        "paused_servers": paused_servers
     })))
 }
 

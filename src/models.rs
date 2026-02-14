@@ -9,6 +9,51 @@ use tracing::warn;
 use crate::config::AppConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitoringJob {
+    pub id: String,
+    pub server_id: String,
+    pub server_name: String,
+    pub job_type: JobType,
+    pub status: JobStatus,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub duration_ms: Option<u64>,
+    pub error: Option<String>,
+    pub metrics_collected: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum JobType {
+    FullCollection,
+    CpuMemory,
+    DiskNetwork,
+    SystemInfo,
+    PingTests,
+}
+
+impl std::fmt::Display for JobType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobType::FullCollection => write!(f, "Full Collection"),
+            JobType::CpuMemory => write!(f, "CPU & Memory"),
+            JobType::DiskNetwork => write!(f, "Disk & Network"),
+            JobType::SystemInfo => write!(f, "System Info"),
+            JobType::PingTests => write!(f, "Ping Tests"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum JobStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Paused,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Server {
     pub id: String,
     pub name: String,
@@ -152,6 +197,8 @@ pub struct AppState {
     pub monitoring_data: Arc<RwLock<HashMap<String, Vec<MonitoringData>>>>,
     pub server_config: Arc<RwLock<ServerConfig>>,
     pub ssh_connections: Arc<RwLock<HashMap<String, SshConnectionInfo>>>,
+    pub jobs: Arc<RwLock<Vec<MonitoringJob>>>,
+    pub paused_servers: Arc<RwLock<std::collections::HashSet<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -199,6 +246,8 @@ impl AppState {
                 keep_alive_interval: Duration::from_secs(30),
             })),
             ssh_connections: Arc::new(RwLock::new(HashMap::new())),
+            jobs: Arc::new(RwLock::new(Vec::new())),
+            paused_servers: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
     }
 
@@ -375,6 +424,58 @@ impl AppState {
         if let Some(conn) = connections.get_mut(server_id) {
             conn.is_active = false;
         }
+    }
+
+    pub fn add_job(&self, job: MonitoringJob) {
+        let mut jobs = self.jobs.write().unwrap();
+        jobs.push(job);
+        // Keep only the last 200 jobs
+        let len = jobs.len();
+        if len > 200 {
+            jobs.drain(0..len - 200);
+        }
+    }
+
+    pub fn update_job_status(&self, job_id: &str, status: JobStatus, error: Option<String>, duration_ms: Option<u64>, metrics: Option<Vec<String>>) {
+        let mut jobs = self.jobs.write().unwrap();
+        if let Some(job) = jobs.iter_mut().find(|j| j.id == job_id) {
+            job.status = status.clone();
+            if let Some(e) = error {
+                job.error = Some(e);
+            }
+            if let Some(d) = duration_ms {
+                job.duration_ms = Some(d);
+            }
+            if let Some(m) = metrics {
+                job.metrics_collected = m;
+            }
+            if status == JobStatus::Running {
+                job.started_at = Some(Utc::now());
+            }
+            if status == JobStatus::Completed || status == JobStatus::Failed {
+                job.completed_at = Some(Utc::now());
+            }
+        }
+    }
+
+    pub fn get_jobs(&self, limit: usize) -> Vec<MonitoringJob> {
+        let jobs = self.jobs.read().unwrap();
+        jobs.iter().rev().take(limit).cloned().collect()
+    }
+
+    pub fn is_server_paused(&self, server_id: &str) -> bool {
+        let paused = self.paused_servers.read().unwrap();
+        paused.contains(server_id)
+    }
+
+    pub fn pause_server(&self, server_id: &str) {
+        let mut paused = self.paused_servers.write().unwrap();
+        paused.insert(server_id.to_string());
+    }
+
+    pub fn resume_server(&self, server_id: &str) {
+        let mut paused = self.paused_servers.write().unwrap();
+        paused.remove(server_id);
     }
 }
 
