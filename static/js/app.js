@@ -1195,7 +1195,7 @@ class MonitorApp {
         };
 
         // Server control section
-        const serverControls = this.servers.map(server => {
+        const serverControls = (this.servers || []).map(server => {
             const isPaused = pausedSet.has(server.id);
             return `
                 <div class="job-server-control">
@@ -1217,7 +1217,7 @@ class MonitorApp {
                 <td>${formatTime(job.created_at)}</td>
                 <td>${formatDuration(job.duration_ms)}</td>
                 <td>${job.metrics_collected && job.metrics_collected.length > 0 ? job.metrics_collected.join(', ') : '-'}</td>
-                <td class="job-error">${job.error ? `<span title="${job.error}">${job.error.substring(0, 40)}${job.error.length > 40 ? '...' : ''}</span>` : '-'}</td>
+                <td class="job-error">${job.error ? `<span title="${this.escapeHtml(job.error)}">${this.escapeHtml(job.error.substring(0, 40))}${job.error.length > 40 ? '...' : ''}</span>` : '-'}</td>
             </tr>
         `).join('');
 
@@ -1378,6 +1378,13 @@ class MonitorApp {
             const days = Math.floor(diffInSeconds / 86400);
             return `${days}d ago`;
         }
+    }
+
+    escapeHtml(str) {
+        if (!str) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     }
 
     async updateConnectionStats() {

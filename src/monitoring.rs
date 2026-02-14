@@ -23,7 +23,13 @@ impl MonitoringService {
         let mut error_messages = vec![];
 
         // Optimized: combine CPU, memory, load, cores, and model into a single SSH command
-        let combined_cmd = "cat /proc/stat | head -1; echo '---SEPARATOR---'; cat /proc/loadavg; echo '---SEPARATOR---'; nproc; echo '---SEPARATOR---'; cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d: -f2; echo '---SEPARATOR---'; cat /proc/meminfo";
+        let combined_cmd = concat!(
+            "cat /proc/stat | head -1; echo '---SEPARATOR---'; ",
+            "cat /proc/loadavg; echo '---SEPARATOR---'; ",
+            "nproc; echo '---SEPARATOR---'; ",
+            "cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d: -f2; echo '---SEPARATOR---'; ",
+            "cat /proc/meminfo"
+        );
         let (cpu, memory) = match ssh_manager.execute_command(server, combined_cmd).await {
             Ok(output) => {
                 let sections: Vec<&str> = output.split("---SEPARATOR---").collect();
@@ -58,7 +64,13 @@ impl MonitoringService {
         };
 
         // Optimized: combine system info into a single SSH command
-        let sys_cmd = "hostname; echo '---SEPARATOR---'; uname -s; echo '---SEPARATOR---'; uname -r; echo '---SEPARATOR---'; cat /proc/uptime; echo '---SEPARATOR---'; uname -m";
+        let sys_cmd = concat!(
+            "hostname; echo '---SEPARATOR---'; ",
+            "uname -s; echo '---SEPARATOR---'; ",
+            "uname -r; echo '---SEPARATOR---'; ",
+            "cat /proc/uptime; echo '---SEPARATOR---'; ",
+            "uname -m"
+        );
         let system_info = match ssh_manager.execute_command(server, sys_cmd).await {
             Ok(output) => {
                 let sections: Vec<&str> = output.split("---SEPARATOR---").collect();
@@ -805,10 +817,15 @@ impl MonitoringService {
         }
 
         let mut ping_tests = Vec::new();
-        for handle in handles {
+        for (i, handle) in handles.into_iter().enumerate() {
             match handle.await {
                 Ok(result) => ping_tests.push(result),
-                Err(_) => {}
+                Err(e) => ping_tests.push(PingTest {
+                    target: targets[i].to_string(),
+                    latency_ms: None,
+                    success: false,
+                    error: Some(format!("Task failed: {}", e)),
+                }),
             }
         }
         
