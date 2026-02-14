@@ -1197,12 +1197,14 @@ class MonitorApp {
         // Server control section
         const serverControls = (this.servers || []).map(server => {
             const isPaused = pausedSet.has(server.id);
+            const escapedName = this.escapeHtml(server.name);
+            const escapedId = this.escapeHtml(server.id);
             return `
                 <div class="job-server-control">
-                    <span class="job-server-name">${server.name}</span>
+                    <span class="job-server-name">${escapedName}</span>
                     <span class="job-server-status ${isPaused ? 'paused' : 'active'}">${isPaused ? 'Paused' : 'Active'}</span>
                     <button class="btn ${isPaused ? 'btn-primary' : 'btn-warning'} btn-small" 
-                            onclick="app.toggleServerMonitoring('${server.id}', ${isPaused})">
+                            onclick="app.toggleServerMonitoring('${escapedId}', ${isPaused})">
                         <i class="fas fa-${isPaused ? 'play' : 'pause'}"></i> ${isPaused ? 'Resume' : 'Pause'}
                     </button>
                 </div>`;
@@ -1211,9 +1213,9 @@ class MonitorApp {
         // Jobs table
         const jobRows = (jobs || []).map(job => `
             <tr class="job-row job-status-${job.status.toLowerCase()}">
-                <td>${getStatusIcon(job.status)} ${job.status}</td>
-                <td>${job.server_name}</td>
-                <td>${job.job_type}</td>
+                <td>${getStatusIcon(job.status)} ${this.escapeHtml(job.status)}</td>
+                <td>${this.escapeHtml(job.server_name)}</td>
+                <td>${this.escapeHtml(job.job_type)}</td>
                 <td>${formatTime(job.created_at)}</td>
                 <td>${formatDuration(job.duration_ms)}</td>
                 <td>${job.metrics_collected && job.metrics_collected.length > 0 ? job.metrics_collected.join(', ') : '-'}</td>
