@@ -482,7 +482,11 @@ pub async fn list_jobs(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(50);
 
-    let jobs = state.get_jobs(limit);
+    let status_filter = params.get("status").map(|s| s.as_str());
+    let server_filter = params.get("server").map(|s| s.as_str());
+
+    let jobs = state.get_jobs_filtered(limit, status_filter, server_filter);
+    let statistics = state.get_job_statistics();
 
     let paused_servers: Vec<String> = {
         let paused = state.paused_servers.read().unwrap();
@@ -491,7 +495,86 @@ pub async fn list_jobs(
 
     Ok(Json(json!({
         "jobs": jobs,
-        "paused_servers": paused_servers
+        "paused_servers": paused_servers,
+        "statistics": statistics
+    })))
+}
+
+pub async fn cancel_job(
+    State(state): State<std::sync::Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.cancel_job(&job_id) {
+        Ok(Json(json!({
+            "message": "Job cancelled successfully",
+            "job_id": job_id
+        })))
+    } else {
+        Ok(Json(json!({
+            "message": "Job not found or not cancellable",
+            "job_id": job_id
+        })))
+    }
+}
+
+pub async fn clear_jobs(
+    State(state): State<std::sync::Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, StatusCode> {
+    let clear_type = params.get("type").map(|s| s.as_str()).unwrap_or("completed");
+    
+    let cleared = match clear_type {
+        "completed" => state.clear_completed_jobs(),
+        "failed" => state.clear_failed_jobs(),
+        "all" => state.clear_all_jobs(),
+        _ => state.clear_completed_jobs(),
+    };
+
+    Ok(Json(json!({
+        "message": format!("Cleared {} jobs", cleared),
+        "cleared": cleared
+    })))
+}
+
+pub async fn get_job_statistics(
+    State(state): State<std::sync::Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let statistics = state.get_job_statistics();
+    Ok(Json(json!(statistics)))
+}
+
+pub async fn pause_all_monitoring(
+    State(state): State<std::sync::Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let servers = state.servers.read().unwrap();
+    let server_ids: Vec<String> = servers.keys().cloned().collect();
+    drop(servers);
+    
+    for id in &server_ids {
+        state.pause_server(id);
+    }
+    
+    Ok(Json(json!({
+        "message": format!("Paused monitoring for {} servers", server_ids.len()),
+        "paused_count": server_ids.len()
+    })))
+}
+
+pub async fn resume_all_monitoring(
+    State(state): State<std::sync::Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let paused: Vec<String> = {
+        let paused = state.paused_servers.read().unwrap();
+        paused.iter().cloned().collect()
+    };
+    
+    for id in &paused {
+        state.resume_server(id);
+    }
+    
+    Ok(Json(json!({
+        "message": format!("Resumed monitoring for {} servers", paused.len()),
+        "resumed_count": paused.len()
     })))
 }
 

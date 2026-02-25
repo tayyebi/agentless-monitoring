@@ -6,7 +6,7 @@ use tracing::{info, warn, error};
 
 use crate::models::{
     CpuInfo, DiskInfo, MemoryInfo, MonitoringData, NetworkInfo, PingTest, PortInfo, SystemInfo,
-    Server, AppState, MonitoringJob, JobType, JobStatus,
+    Server, AppState, MonitoringJob, JobType, JobStatus, JobPriority,
 };
 use crate::ssh::SshConnectionManager;
 
@@ -22,75 +22,78 @@ impl MonitoringService {
         let server_id = server.id.clone();
         let mut error_messages = vec![];
 
-        // Optimized: combine CPU, memory, load, cores, and model into a single SSH command
-        let combined_cmd = concat!(
-            "cat /proc/stat | head -1; echo '---SEPARATOR---'; ",
-            "cat /proc/loadavg; echo '---SEPARATOR---'; ",
-            "nproc; echo '---SEPARATOR---'; ",
-            "cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d: -f2; echo '---SEPARATOR---'; ",
-            "cat /proc/meminfo"
+        // OPTIMIZED: Single mega-command that collects CPU, memory, load, cores, model,
+        // disk, network, system info, and ports in ONE SSH call
+        let mega_cmd = concat!(
+            "cat /proc/stat | head -1; echo '---SEP---'; ",
+            "cat /proc/loadavg; echo '---SEP---'; ",
+            "nproc; echo '---SEP---'; ",
+            "cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d: -f2; echo '---SEP---'; ",
+            "cat /proc/meminfo; echo '---SEP---'; ",
+            "df -h; echo '---SEP---'; ",
+            "cat /proc/net/dev; echo '---SEP---'; ",
+            "hostname; echo '---SEP---'; ",
+            "uname -s; echo '---SEP---'; ",
+            "uname -r; echo '---SEP---'; ",
+            "cat /proc/uptime; echo '---SEP---'; ",
+            "uname -m; echo '---SEP---'; ",
+            "(ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null || echo 'no_port_info')"
         );
-        let (cpu, memory) = match ssh_manager.execute_command(server, combined_cmd).await {
+
+        let (cpu, memory, disks, network, system_info, ports) = match ssh_manager.execute_command(server, mega_cmd).await {
             Ok(output) => {
-                let sections: Vec<&str> = output.split("---SEPARATOR---").collect();
-                let cpu = Self::parse_combined_cpu(sections.as_slice());
-                let mem = if sections.len() >= 5 {
+                let sections: Vec<&str> = output.split("---SEP---").collect();
+                
+                // Parse CPU (sections 0-3)
+                let cpu = Self::parse_combined_cpu(&sections[..std::cmp::min(4, sections.len())]);
+                
+                // Parse Memory (section 4)
+                let mem = if sections.len() > 4 {
                     Self::parse_meminfo(sections[4]).unwrap_or_else(|_| MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 })
                 } else {
                     MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 }
                 };
-                (cpu, mem)
+                
+                // Parse Disks (section 5)
+                let disks = if sections.len() > 5 {
+                    Self::parse_df_output(sections[5]).unwrap_or_default()
+                } else { Vec::new() };
+                
+                // Parse Network (section 6)
+                let network = if sections.len() > 6 {
+                    Self::parse_net_dev(sections[6]).unwrap_or_default()
+                } else { Vec::new() };
+                
+                // Parse System Info (sections 7-11)
+                let system_info = SystemInfo {
+                    hostname: sections.get(7).unwrap_or(&"").trim().to_string(),
+                    os: sections.get(8).unwrap_or(&"").trim().to_string(),
+                    kernel: sections.get(9).unwrap_or(&"").trim().to_string(),
+                    uptime: sections.get(10).unwrap_or(&"").trim().split_whitespace().next().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0) as u64,
+                    architecture: sections.get(11).unwrap_or(&"").trim().to_string(),
+                };
+                
+                // Parse Ports (section 12)
+                let ports = if sections.len() > 12 {
+                    let port_output = sections[12].trim();
+                    if port_output != "no_port_info" {
+                        Self::parse_netstat(port_output).or_else(|_| Self::parse_ss_output(port_output)).unwrap_or_default()
+                    } else { Vec::new() }
+                } else { Vec::new() };
+                
+                (cpu, mem, disks, network, system_info, ports)
             }
             Err(e) => {
-                error_messages.push(format!("CPU/Memory: {}", e));
+                error_messages.push(format!("Data collection: {}", e));
                 (CpuInfo { usage_percent: 0.0, load_average: [0.0, 0.0, 0.0], cores: 0, model: String::new() },
-                 MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 })
+                 MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 },
+                 Vec::new(), Vec::new(),
+                 SystemInfo { hostname: String::new(), os: String::new(), kernel: String::new(), uptime: 0, architecture: String::new() },
+                 Vec::new())
             }
         };
 
-        // Optimized: combine disk and network into a single SSH command
-        let disk_net_cmd = "df -h; echo '---SEPARATOR---'; cat /proc/net/dev";
-        let (disks, network) = match ssh_manager.execute_command(server, disk_net_cmd).await {
-            Ok(output) => {
-                let sections: Vec<&str> = output.split("---SEPARATOR---").collect();
-                let d = if !sections.is_empty() { Self::parse_df_output(sections[0]).unwrap_or_default() } else { Vec::new() };
-                let n = if sections.len() >= 2 { Self::parse_net_dev(sections[1]).unwrap_or_default() } else { Vec::new() };
-                (d, n)
-            }
-            Err(e) => {
-                error_messages.push(format!("Disk/Network: {}", e));
-                (Vec::new(), Vec::new())
-            }
-        };
-
-        // Optimized: combine system info into a single SSH command
-        let sys_cmd = concat!(
-            "hostname; echo '---SEPARATOR---'; ",
-            "uname -s; echo '---SEPARATOR---'; ",
-            "uname -r; echo '---SEPARATOR---'; ",
-            "cat /proc/uptime; echo '---SEPARATOR---'; ",
-            "uname -m"
-        );
-        let system_info = match ssh_manager.execute_command(server, sys_cmd).await {
-            Ok(output) => {
-                let sections: Vec<&str> = output.split("---SEPARATOR---").collect();
-                SystemInfo {
-                    hostname: sections.first().unwrap_or(&"").trim().to_string(),
-                    os: sections.get(1).unwrap_or(&"").trim().to_string(),
-                    kernel: sections.get(2).unwrap_or(&"").trim().to_string(),
-                    uptime: sections.get(3).unwrap_or(&"").trim().split_whitespace().next().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0) as u64,
-                    architecture: sections.get(4).unwrap_or(&"").trim().to_string(),
-                }
-            }
-            Err(e) => { error_messages.push(format!("System: {}", e)); SystemInfo { hostname: String::new(), os: String::new(), kernel: String::new(), uptime: 0, architecture: String::new() } }
-        };
-
-        let ports = match Self::get_port_info(ssh_manager, server).await {
-            Ok(p) => p,
-            Err(e) => { error_messages.push(format!("Ports: {}", e)); Vec::new() }
-        };
-
-        // Optimized: combine ping tests into a single SSH command
+        // Optimized: combine ping tests into a single SSH command (second and final SSH call)
         let ping_tests = match Self::run_ping_tests_combined(ssh_manager, server).await {
             Ok(p) => p,
             Err(e) => { error_messages.push(format!("Ping: {}", e)); Vec::new() }
@@ -110,7 +113,7 @@ impl MonitoringService {
 
         if !error_messages.is_empty() {
             warn!("⚠️ Encountered {} errors during monitoring: {}", error_messages.len(), error_messages.join(" | "));
-            if error_messages.len() >= 3 {
+            if error_messages.len() >= 2 {
                 let error = error_messages.join(" | ");
                 return Err(anyhow::anyhow!(error));
             }
@@ -235,6 +238,8 @@ impl MonitoringService {
                         duration_ms: None,
                         error: None,
                         metrics_collected: Vec::new(),
+                        retry_count: 0,
+                        priority: JobPriority::Normal,
                     };
                     app_state.add_job(job);
 
@@ -363,6 +368,28 @@ impl MonitoringService {
     fn parse_ss(_output: &str) -> Result<Vec<PortInfo>> {
         // Similar to netstat parsing
         Ok(vec![])
+    }
+
+    fn parse_ss_output(output: &str) -> Result<Vec<PortInfo>> {
+        let mut ports = Vec::new();
+        for line in output.lines().skip(1) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 5 {
+                let local_addr = parts[4];
+                if let Some(port_str) = local_addr.split(':').last() {
+                    if let Ok(port) = port_str.parse::<u16>() {
+                        ports.push(PortInfo {
+                            port,
+                            protocol: parts[0].to_lowercase(),
+                            state: parts.get(1).unwrap_or(&"LISTEN").to_string(),
+                            process: None,
+                            pid: None,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(ports)
     }
 
     async fn run_ping_tests_combined(ssh_manager: &SshConnectionManager, server: &Server) -> Result<Vec<PingTest>> {
