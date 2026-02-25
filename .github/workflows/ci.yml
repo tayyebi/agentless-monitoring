@@ -144,6 +144,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install cross-compilation toolchain (aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
@@ -157,6 +163,9 @@ jobs:
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Test build
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo test --release --target ${{ matrix.target }}
