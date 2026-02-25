@@ -12,8 +12,8 @@
         <header class="header">
             <h1><i class="fas fa-server"></i> Agentless Monitor</h1>
             <div class="header-controls">
-                <button class="btn btn-secondary btn-small" onclick="app.showJobsPanel()" title="View monitoring jobs">
-                    <i class="fas fa-tasks"></i> Jobs
+                <button class="btn btn-primary btn-small" onclick="app.showJobsPanel()" title="Open Job Manager">
+                    <i class="fas fa-tasks"></i> Job Manager
                 </button>
                 <div class="ssh-info">
                     <i class="fas fa-cog"></i> SSH Config: ~/.ssh/config
@@ -131,17 +131,91 @@
 
     <!-- Jobs Control Panel Modal -->
     <div id="jobsPanelModal" class="modal">
-        <div class="modal-content large">
+        <div class="modal-content xlarge">
             <div class="modal-header">
-                <h2><i class="fas fa-tasks"></i> Monitoring Jobs</h2>
+                <h2><i class="fas fa-tasks"></i> Job Manager</h2>
                 <span class="close" onclick="closeJobsPanel()">&times;</span>
             </div>
             <div class="modal-body">
-                <div class="jobs-controls">
-                    <button class="btn btn-secondary btn-small" onclick="app.refreshJobs()">
-                        <i class="fas fa-sync"></i> Refresh
-                    </button>
+                <!-- Statistics Dashboard -->
+                <div id="jobsStatsDashboard" class="jobs-stats-dashboard">
+                    <div class="stats-grid">
+                        <div class="stat-card stat-total"><div class="stat-number" id="statTotal">0</div><div class="stat-label">Total Jobs</div></div>
+                        <div class="stat-card stat-completed"><div class="stat-number" id="statCompleted">0</div><div class="stat-label">Completed</div></div>
+                        <div class="stat-card stat-failed"><div class="stat-number" id="statFailed">0</div><div class="stat-label">Failed</div></div>
+                        <div class="stat-card stat-running"><div class="stat-number" id="statRunning">0</div><div class="stat-label">Running</div></div>
+                        <div class="stat-card stat-pending"><div class="stat-number" id="statPending">0</div><div class="stat-label">Pending</div></div>
+                        <div class="stat-card stat-rate"><div class="stat-number" id="statSuccessRate">0%</div><div class="stat-label">Success Rate</div></div>
+                        <div class="stat-card stat-avg"><div class="stat-number" id="statAvgDuration">0ms</div><div class="stat-label">Avg Duration</div></div>
+                    </div>
                 </div>
+
+                <!-- Controls Bar -->
+                <div class="jobs-controls-bar">
+                    <div class="jobs-controls-left">
+                        <div class="filter-group">
+                            <label>Status:</label>
+                            <select id="jobStatusFilter" onchange="app.refreshJobs()">
+                                <option value="">All</option>
+                                <option value="Completed">Completed</option>
+                                <option value="Failed">Failed</option>
+                                <option value="Running">Running</option>
+                                <option value="Pending">Pending</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Server:</label>
+                            <select id="jobServerFilter" onchange="app.refreshJobs()">
+                                <option value="">All Servers</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Limit:</label>
+                            <select id="jobLimitFilter" onchange="app.refreshJobs()">
+                                <option value="25">25</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                                <option value="200">200</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="jobs-controls-right">
+                        <button class="btn btn-secondary btn-small" onclick="app.refreshJobs()" title="Refresh">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                        <div class="dropdown">
+                            <button class="btn btn-secondary btn-small dropdown-toggle" onclick="toggleDropdown('clearDropdown')">
+                                <i class="fas fa-broom"></i> Clear <i class="fas fa-caret-down"></i>
+                            </button>
+                            <div id="clearDropdown" class="dropdown-menu">
+                                <a href="#" onclick="app.clearJobs('completed'); return false;"><i class="fas fa-check"></i> Clear Completed</a>
+                                <a href="#" onclick="app.clearJobs('failed'); return false;"><i class="fas fa-times"></i> Clear Failed</a>
+                                <a href="#" class="danger" onclick="app.clearJobs('all'); return false;"><i class="fas fa-trash"></i> Clear All</a>
+                            </div>
+                        </div>
+                        <div class="dropdown">
+                            <button class="btn btn-secondary btn-small dropdown-toggle" onclick="toggleDropdown('bulkDropdown')">
+                                <i class="fas fa-layer-group"></i> Bulk <i class="fas fa-caret-down"></i>
+                            </button>
+                            <div id="bulkDropdown" class="dropdown-menu">
+                                <a href="#" onclick="app.pauseAllMonitoring(); return false;"><i class="fas fa-pause"></i> Pause All</a>
+                                <a href="#" onclick="app.resumeAllMonitoring(); return false;"><i class="fas fa-play"></i> Resume All</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Auto-refresh toggle -->
+                <div class="jobs-auto-refresh">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="jobsAutoRefresh" checked onchange="app.toggleJobsAutoRefresh()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span>Auto-refresh (5s)</span>
+                    <span class="last-updated" id="jobsLastUpdated"></span>
+                </div>
+
                 <div id="jobsPanelContent">
                     <div class="loading-container">
                         <div class="loading-spinner"></div>
@@ -153,5 +227,17 @@
     </div>
 
     <script src="/static/js/app.js"></script>
+    <script>
+    function toggleDropdown(id) {
+        const dd = document.getElementById(id);
+        document.querySelectorAll('.dropdown-menu').forEach(m => { if (m.id !== id) m.classList.remove('show'); });
+        dd.classList.toggle('show');
+    }
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.dropdown')) {
+            document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('show'));
+        }
+    });
+    </script>
 </body>
 </html>

@@ -21,6 +21,16 @@ pub struct MonitoringJob {
     pub duration_ms: Option<u64>,
     pub error: Option<String>,
     pub metrics_collected: Vec<String>,
+    pub retry_count: u32,
+    pub priority: JobPriority,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum JobPriority {
+    Low,
+    Normal,
+    High,
+    Critical,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,6 +61,8 @@ pub enum JobStatus {
     Completed,
     Failed,
     Paused,
+    Cancelled,
+    Retrying,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +475,100 @@ impl AppState {
         jobs.iter().rev().take(limit).cloned().collect()
     }
 
+    pub fn get_jobs_filtered(&self, limit: usize, status_filter: Option<&str>, server_filter: Option<&str>) -> Vec<MonitoringJob> {
+        let jobs = self.jobs.read().unwrap();
+        jobs.iter()
+            .rev()
+            .filter(|j| {
+                if let Some(sf) = status_filter {
+                    let job_status = format!("{:?}", j.status);
+                    if !job_status.eq_ignore_ascii_case(sf) {
+                        return false;
+                    }
+                }
+                if let Some(svf) = server_filter {
+                    if j.server_id != svf {
+                        return false;
+                    }
+                }
+                true
+            })
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_job_statistics(&self) -> JobStatistics {
+        let jobs = self.jobs.read().unwrap();
+        let total = jobs.len();
+        let completed = jobs.iter().filter(|j| j.status == JobStatus::Completed).count();
+        let failed = jobs.iter().filter(|j| j.status == JobStatus::Failed).count();
+        let running = jobs.iter().filter(|j| j.status == JobStatus::Running).count();
+        let pending = jobs.iter().filter(|j| j.status == JobStatus::Pending).count();
+        let cancelled = jobs.iter().filter(|j| j.status == JobStatus::Cancelled).count();
+
+        let avg_duration = {
+            let completed_jobs: Vec<&MonitoringJob> = jobs.iter().filter(|j| j.status == JobStatus::Completed && j.duration_ms.is_some()).collect();
+            if completed_jobs.is_empty() {
+                0.0
+            } else {
+                let total_duration: u64 = completed_jobs.iter().map(|j| j.duration_ms.unwrap_or(0)).sum();
+                total_duration as f64 / completed_jobs.len() as f64
+            }
+        };
+
+        let success_rate = if completed + failed > 0 {
+            (completed as f64 / (completed + failed) as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        JobStatistics {
+            total,
+            completed,
+            failed,
+            running,
+            pending,
+            cancelled,
+            avg_duration_ms: avg_duration,
+            success_rate,
+        }
+    }
+
+    pub fn cancel_job(&self, job_id: &str) -> bool {
+        let mut jobs = self.jobs.write().unwrap();
+        if let Some(job) = jobs.iter_mut().find(|j| j.id == job_id) {
+            if job.status == JobStatus::Pending || job.status == JobStatus::Running {
+                job.status = JobStatus::Cancelled;
+                job.completed_at = Some(Utc::now());
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn clear_completed_jobs(&self) -> usize {
+        let mut jobs = self.jobs.write().unwrap();
+        let before = jobs.len();
+        jobs.retain(|j| j.status != JobStatus::Completed && j.status != JobStatus::Cancelled);
+        before - jobs.len()
+    }
+
+    pub fn clear_failed_jobs(&self) -> usize {
+        let mut jobs = self.jobs.write().unwrap();
+        let before = jobs.len();
+        jobs.retain(|j| j.status != JobStatus::Failed);
+        before - jobs.len()
+    }
+
+    pub fn clear_all_jobs(&self) -> usize {
+        let mut jobs = self.jobs.write().unwrap();
+        let count = jobs.len();
+        // Only clear non-running jobs
+        jobs.retain(|j| j.status == JobStatus::Running);
+        count - jobs.len()
+    }
+
     pub fn is_server_paused(&self, server_id: &str) -> bool {
         let paused = self.paused_servers.read().unwrap();
         paused.contains(server_id)
@@ -477,6 +583,18 @@ impl AppState {
         let mut paused = self.paused_servers.write().unwrap();
         paused.remove(server_id);
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobStatistics {
+    pub total: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub running: usize,
+    pub pending: usize,
+    pub cancelled: usize,
+    pub avg_duration_ms: f64,
+    pub success_rate: f64,
 }
 
 #[derive(Debug, Clone)]

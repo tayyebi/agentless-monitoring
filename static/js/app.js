@@ -1128,24 +1128,143 @@ class MonitorApp {
     // Jobs Control Panel
     async showJobsPanel() {
         document.getElementById('jobsPanelModal').style.display = 'block';
+        this.populateServerFilter();
         await this.refreshJobs();
+        this.startJobsAutoRefresh();
     }
 
     closeJobsPanel() {
         document.getElementById('jobsPanelModal').style.display = 'none';
+        this.stopJobsAutoRefresh();
+    }
+
+    startJobsAutoRefresh() {
+        this.stopJobsAutoRefresh();
+        if (document.getElementById('jobsAutoRefresh')?.checked) {
+            this.jobsAutoRefreshTimer = setInterval(() => this.refreshJobs(), 5000);
+        }
+    }
+
+    stopJobsAutoRefresh() {
+        if (this.jobsAutoRefreshTimer) {
+            clearInterval(this.jobsAutoRefreshTimer);
+            this.jobsAutoRefreshTimer = null;
+        }
+    }
+
+    toggleJobsAutoRefresh() {
+        if (document.getElementById('jobsAutoRefresh')?.checked) {
+            this.startJobsAutoRefresh();
+        } else {
+            this.stopJobsAutoRefresh();
+        }
+    }
+
+    populateServerFilter() {
+        const select = document.getElementById('jobServerFilter');
+        if (!select) return;
+        const current = select.value;
+        select.innerHTML = '<option value="">All Servers</option>';
+        for (const server of this.servers || []) {
+            const opt = document.createElement('option');
+            opt.value = server.id;
+            opt.textContent = server.name;
+            select.appendChild(opt);
+        }
+        select.value = current;
     }
 
     async refreshJobs() {
         const content = document.getElementById('jobsPanelContent');
-        content.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div><div>Loading jobs...</div></div>';
+        
+        const statusFilter = document.getElementById('jobStatusFilter')?.value || '';
+        const serverFilter = document.getElementById('jobServerFilter')?.value || '';
+        const limit = document.getElementById('jobLimitFilter')?.value || '50';
+        
+        let url = `/api/jobs?limit=${limit}`;
+        if (statusFilter) url += `&status=${statusFilter}`;
+        if (serverFilter) url += `&server=${serverFilter}`;
 
         try {
-            const response = await fetch('/api/jobs?limit=50');
+            const response = await fetch(url);
             if (!response.ok) throw new Error('Failed to load jobs');
             const data = await response.json();
             this.renderJobsPanel(data);
+            this.updateJobStatistics(data.statistics);
+            
+            const lastUpdated = document.getElementById('jobsLastUpdated');
+            if (lastUpdated) {
+                lastUpdated.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+            }
         } catch (error) {
-            content.innerHTML = `<div class="error-container"><i class="fas fa-exclamation-triangle"></i><p>Error loading jobs: ${error.message}</p></div>`;
+            if (content) {
+                content.innerHTML = `<div class="error-container"><i class="fas fa-exclamation-triangle"></i><p>Error loading jobs: ${error.message}</p></div>`;
+            }
+        }
+    }
+
+    updateJobStatistics(stats) {
+        if (!stats) return;
+        const el = (id) => document.getElementById(id);
+        if (el('statTotal')) el('statTotal').textContent = stats.total || 0;
+        if (el('statCompleted')) el('statCompleted').textContent = stats.completed || 0;
+        if (el('statFailed')) el('statFailed').textContent = stats.failed || 0;
+        if (el('statRunning')) el('statRunning').textContent = stats.running || 0;
+        if (el('statPending')) el('statPending').textContent = stats.pending || 0;
+        if (el('statSuccessRate')) el('statSuccessRate').textContent = `${(stats.success_rate || 0).toFixed(1)}%`;
+        if (el('statAvgDuration')) {
+            const avg = stats.avg_duration_ms || 0;
+            el('statAvgDuration').textContent = avg < 1000 ? `${Math.round(avg)}ms` : `${(avg / 1000).toFixed(1)}s`;
+        }
+    }
+
+    async cancelJob(jobId) {
+        try {
+            const response = await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
+            if (!response.ok) throw new Error('Failed to cancel job');
+            this.showNotification('Job cancelled', 'success');
+            await this.refreshJobs();
+        } catch (error) {
+            this.showNotification(`Error: ${error.message}`, 'error');
+        }
+    }
+
+    async clearJobs(type) {
+        const confirmMsg = type === 'all' ? 'Clear ALL non-running jobs?' : `Clear ${type} jobs?`;
+        if (!confirm(confirmMsg)) return;
+        
+        try {
+            const response = await fetch(`/api/jobs/clear?type=${type}`, { method: 'POST' });
+            if (!response.ok) throw new Error('Failed to clear jobs');
+            const data = await response.json();
+            this.showNotification(data.message, 'success');
+            await this.refreshJobs();
+        } catch (error) {
+            this.showNotification(`Error: ${error.message}`, 'error');
+        }
+    }
+
+    async pauseAllMonitoring() {
+        try {
+            const response = await fetch('/api/monitoring/pause-all', { method: 'POST' });
+            if (!response.ok) throw new Error('Failed to pause all');
+            const data = await response.json();
+            this.showNotification(data.message, 'success');
+            await this.refreshJobs();
+        } catch (error) {
+            this.showNotification(`Error: ${error.message}`, 'error');
+        }
+    }
+
+    async resumeAllMonitoring() {
+        try {
+            const response = await fetch('/api/monitoring/resume-all', { method: 'POST' });
+            if (!response.ok) throw new Error('Failed to resume all');
+            const data = await response.json();
+            this.showNotification(data.message, 'success');
+            await this.refreshJobs();
+        } catch (error) {
+            this.showNotification(`Error: ${error.message}`, 'error');
         }
     }
 
@@ -1171,27 +1290,39 @@ class MonitorApp {
         const { jobs, paused_servers } = data;
         const pausedSet = new Set(paused_servers || []);
 
-        const getStatusIcon = (status) => {
-            switch (status) {
-                case 'Completed': return '<i class="fas fa-check-circle" style="color: #28a745;"></i>';
-                case 'Running': return '<i class="fas fa-spinner fa-spin" style="color: #007bff;"></i>';
-                case 'Failed': return '<i class="fas fa-times-circle" style="color: #dc3545;"></i>';
-                case 'Pending': return '<i class="fas fa-clock" style="color: #ffc107;"></i>';
-                case 'Paused': return '<i class="fas fa-pause-circle" style="color: #6c757d;"></i>';
-                default: return '<i class="fas fa-question-circle"></i>';
-            }
+        const getStatusBadge = (status) => {
+            const icons = {
+                'Completed': '<i class="fas fa-check-circle"></i>',
+                'Running': '<i class="fas fa-spinner fa-spin"></i>',
+                'Failed': '<i class="fas fa-times-circle"></i>',
+                'Pending': '<i class="fas fa-clock"></i>',
+                'Paused': '<i class="fas fa-pause-circle"></i>',
+                'Cancelled': '<i class="fas fa-ban"></i>',
+                'Retrying': '<i class="fas fa-redo"></i>'
+            };
+            const badgeClass = `badge-${(status || 'pending').toLowerCase()}`;
+            return `<span class="job-status-badge ${badgeClass}">${icons[status] || '<i class="fas fa-question-circle"></i>'} ${status}</span>`;
         };
 
         const formatDuration = (ms) => {
             if (!ms && ms !== 0) return '-';
             if (ms < 1000) return `${ms}ms`;
-            return `${(ms / 1000).toFixed(1)}s`;
+            if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+            return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
         };
 
         const formatTime = (ts) => {
             if (!ts) return '-';
             const d = new Date(ts);
             return d.toLocaleTimeString();
+        };
+
+        const formatTimeAgo = (ts) => {
+            if (!ts) return '';
+            const diff = Date.now() - new Date(ts).getTime();
+            if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
+            if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+            return `${Math.floor(diff / 3600000)}h ago`;
         };
 
         // Server control section
@@ -1210,27 +1341,37 @@ class MonitorApp {
                 </div>`;
         }).join('');
 
-        // Jobs table
-        const jobRows = (jobs || []).map(job => `
-            <tr class="job-row job-status-${job.status.toLowerCase()}">
-                <td>${getStatusIcon(job.status)} ${this.escapeHtml(job.status)}</td>
-                <td>${this.escapeHtml(job.server_name)}</td>
-                <td>${this.escapeHtml(job.job_type)}</td>
-                <td>${formatTime(job.created_at)}</td>
+        // Jobs table with enhanced info
+        const jobRows = (jobs || []).map(job => {
+            const canCancel = job.status === 'Pending' || job.status === 'Running';
+            const actions = canCancel
+                ? `<button class="job-action-btn cancel" onclick="app.cancelJob('${this.escapeHtml(job.id)}')" title="Cancel"><i class="fas fa-ban"></i></button>`
+                : '';
+            const retryBadge = job.retry_count > 0 ? `<span style="font-size:0.7rem;color:#6c757d;margin-left:0.3rem;">(retry #${job.retry_count})</span>` : '';
+            
+            return `
+            <tr class="job-row job-status-${(job.status || '').toLowerCase()}">
+                <td>${getStatusBadge(job.status)}${retryBadge}</td>
+                <td title="${this.escapeHtml(job.server_id)}">${this.escapeHtml(job.server_name)}</td>
+                <td>${this.escapeHtml(typeof job.job_type === 'string' ? job.job_type : (job.job_type?.FullCollection ? 'Full Collection' : JSON.stringify(job.job_type)))}</td>
+                <td title="${job.created_at || ''}">${formatTime(job.created_at)}<br><small style="color:#adb5bd">${formatTimeAgo(job.created_at)}</small></td>
                 <td>${formatDuration(job.duration_ms)}</td>
-                <td>${job.metrics_collected && job.metrics_collected.length > 0 ? job.metrics_collected.join(', ') : '-'}</td>
-                <td class="job-error">${job.error ? `<span title="${this.escapeHtml(job.error)}">${this.escapeHtml(job.error.substring(0, 40))}${job.error.length > 40 ? '...' : ''}</span>` : '-'}</td>
-            </tr>
-        `).join('');
+                <td>${job.metrics_collected && job.metrics_collected.length > 0 
+                    ? `<span title="${job.metrics_collected.join(', ')}">${job.metrics_collected.length} metrics</span>` 
+                    : '-'}</td>
+                <td class="job-error">${job.error ? `<span title="${this.escapeHtml(job.error)}">${this.escapeHtml(job.error.substring(0, 50))}${job.error.length > 50 ? '...' : ''}</span>` : '-'}</td>
+                <td class="job-actions">${actions}</td>
+            </tr>`;
+        }).join('');
 
         document.getElementById('jobsPanelContent').innerHTML = `
             <div class="jobs-panel">
                 <div class="jobs-server-controls">
                     <h3><i class="fas fa-server"></i> Server Monitoring Controls</h3>
-                    <div class="server-controls-list">${serverControls}</div>
+                    <div class="server-controls-list">${serverControls || '<div style="color:#adb5bd;text-align:center;padding:0.5rem;">No servers configured</div>'}</div>
                 </div>
                 <div class="jobs-table-section">
-                    <h3><i class="fas fa-history"></i> Recent Jobs (${jobs ? jobs.length : 0})</h3>
+                    <h3><i class="fas fa-history"></i> Jobs (${jobs ? jobs.length : 0})</h3>
                     <div class="jobs-table-wrapper">
                         <table class="jobs-table">
                             <thead>
@@ -1242,9 +1383,10 @@ class MonitorApp {
                                     <th>Duration</th>
                                     <th>Metrics</th>
                                     <th>Error</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
-                            <tbody>${jobRows || '<tr><td colspan="7" style="text-align:center;">No jobs yet</td></tr>'}</tbody>
+                            <tbody>${jobRows || '<tr><td colspan="8" style="text-align:center;color:#adb5bd;padding:2rem;">No jobs yet. Monitoring will create jobs automatically.</td></tr>'}</tbody>
                         </table>
                     </div>
                 </div>
