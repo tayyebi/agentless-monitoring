@@ -28,7 +28,7 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load() -> Result<Self> {
         let config_path = "config.json";
-        
+
         if Path::new(config_path).exists() {
             let content = std::fs::read_to_string(config_path)?;
             let config: AppConfig = serde_json::from_str(&content)?;

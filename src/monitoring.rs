@@ -2,18 +2,21 @@ use anyhow::Result;
 use chrono::Utc;
 use regex::Regex;
 use std::sync::Arc;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use crate::models::{
-    CpuInfo, DiskInfo, MemoryInfo, MonitoringData, NetworkInfo, PingTest, PortInfo, SystemInfo,
-    Server, AppState, MonitoringJob, JobType, JobStatus, JobPriority,
+    AppState, CpuInfo, DiskInfo, JobPriority, JobStatus, JobType, MemoryInfo, MonitoringData,
+    MonitoringJob, NetworkInfo, PingTest, PortInfo, Server, SystemInfo,
 };
 use crate::ssh::SshConnectionManager;
 
 pub struct MonitoringService;
 
 impl MonitoringService {
-    pub async fn collect_data(ssh_manager: &SshConnectionManager, server: &Server) -> Result<MonitoringData> {
+    pub async fn collect_data(
+        ssh_manager: &SshConnectionManager,
+        server: &Server,
+    ) -> Result<MonitoringData> {
         // For local machine, collect data directly without SSH
         if server.id == "local" {
             return Self::collect_local_data().await;
@@ -40,63 +43,122 @@ impl MonitoringService {
             "(ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null || echo 'no_port_info')"
         );
 
-        let (cpu, memory, disks, network, system_info, ports) = match ssh_manager.execute_command(server, mega_cmd).await {
-            Ok(output) => {
-                let sections: Vec<&str> = output.split("---SEP---").collect();
-                
-                // Parse CPU (sections 0-3)
-                let cpu = Self::parse_combined_cpu(&sections[..std::cmp::min(4, sections.len())]);
-                
-                // Parse Memory (section 4)
-                let mem = if sections.len() > 4 {
-                    Self::parse_meminfo(sections[4]).unwrap_or_else(|_| MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 })
-                } else {
-                    MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 }
-                };
-                
-                // Parse Disks (section 5)
-                let disks = if sections.len() > 5 {
-                    Self::parse_df_output(sections[5]).unwrap_or_default()
-                } else { Vec::new() };
-                
-                // Parse Network (section 6)
-                let network = if sections.len() > 6 {
-                    Self::parse_net_dev(sections[6]).unwrap_or_default()
-                } else { Vec::new() };
-                
-                // Parse System Info (sections 7-11)
-                let system_info = SystemInfo {
-                    hostname: sections.get(7).unwrap_or(&"").trim().to_string(),
-                    os: sections.get(8).unwrap_or(&"").trim().to_string(),
-                    kernel: sections.get(9).unwrap_or(&"").trim().to_string(),
-                    uptime: sections.get(10).unwrap_or(&"").trim().split_whitespace().next().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0) as u64,
-                    architecture: sections.get(11).unwrap_or(&"").trim().to_string(),
-                };
-                
-                // Parse Ports (section 12)
-                let ports = if sections.len() > 12 {
-                    let port_output = sections[12].trim();
-                    if port_output != "no_port_info" {
-                        Self::parse_netstat(port_output).or_else(|_| Self::parse_ss_output(port_output)).unwrap_or_default()
-                    } else { Vec::new() }
-                } else { Vec::new() };
-                
-                (cpu, mem, disks, network, system_info, ports)
-            }
-            Err(e) => {
-                error_messages.push(format!("Data collection: {}", e));
-                (CpuInfo { usage_percent: 0.0, load_average: [0.0, 0.0, 0.0], cores: 0, model: String::new() },
-                 MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 },
-                 Vec::new(), Vec::new(),
-                 SystemInfo { hostname: String::new(), os: String::new(), kernel: String::new(), uptime: 0, architecture: String::new() },
-                 Vec::new())
-            }
-        };
+        let (cpu, memory, disks, network, system_info, ports) =
+            match ssh_manager.execute_command(server, mega_cmd).await {
+                Ok(output) => {
+                    let sections: Vec<&str> = output.split("---SEP---").collect();
+
+                    // Parse CPU (sections 0-3)
+                    let cpu =
+                        Self::parse_combined_cpu(&sections[..std::cmp::min(4, sections.len())]);
+
+                    // Parse Memory (section 4)
+                    let mem = if sections.len() > 4 {
+                        Self::parse_meminfo(sections[4]).unwrap_or(MemoryInfo {
+                            total: 0,
+                            used: 0,
+                            free: 0,
+                            available: 0,
+                            swap_total: 0,
+                            swap_used: 0,
+                            swap_free: 0,
+                        })
+                    } else {
+                        MemoryInfo {
+                            total: 0,
+                            used: 0,
+                            free: 0,
+                            available: 0,
+                            swap_total: 0,
+                            swap_used: 0,
+                            swap_free: 0,
+                        }
+                    };
+
+                    // Parse Disks (section 5)
+                    let disks = if sections.len() > 5 {
+                        Self::parse_df_output(sections[5]).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Parse Network (section 6)
+                    let network = if sections.len() > 6 {
+                        Self::parse_net_dev(sections[6]).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Parse System Info (sections 7-11)
+                    let system_info = SystemInfo {
+                        hostname: sections.get(7).unwrap_or(&"").trim().to_string(),
+                        os: sections.get(8).unwrap_or(&"").trim().to_string(),
+                        kernel: sections.get(9).unwrap_or(&"").trim().to_string(),
+                        uptime: sections
+                            .get(10)
+                            .unwrap_or(&"")
+                            .split_whitespace()
+                            .next()
+                            .and_then(|s| s.parse::<f64>().ok())
+                            .unwrap_or(0.0) as u64,
+                        architecture: sections.get(11).unwrap_or(&"").trim().to_string(),
+                    };
+
+                    // Parse Ports (section 12)
+                    let ports = if sections.len() > 12 {
+                        let port_output = sections[12].trim();
+                        if port_output != "no_port_info" {
+                            Self::parse_netstat(port_output)
+                                .or_else(|_| Self::parse_ss_output(port_output))
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    };
+
+                    (cpu, mem, disks, network, system_info, ports)
+                }
+                Err(e) => {
+                    error_messages.push(format!("Data collection: {}", e));
+                    (
+                        CpuInfo {
+                            usage_percent: 0.0,
+                            load_average: [0.0, 0.0, 0.0],
+                            cores: 0,
+                            model: String::new(),
+                        },
+                        MemoryInfo {
+                            total: 0,
+                            used: 0,
+                            free: 0,
+                            available: 0,
+                            swap_total: 0,
+                            swap_used: 0,
+                            swap_free: 0,
+                        },
+                        Vec::new(),
+                        Vec::new(),
+                        SystemInfo {
+                            hostname: String::new(),
+                            os: String::new(),
+                            kernel: String::new(),
+                            uptime: 0,
+                            architecture: String::new(),
+                        },
+                        Vec::new(),
+                    )
+                }
+            };
 
         // Optimized: combine ping tests into a single SSH command (second and final SSH call)
         let ping_tests = match Self::run_ping_tests_combined(ssh_manager, server).await {
             Ok(p) => p,
-            Err(e) => { error_messages.push(format!("Ping: {}", e)); Vec::new() }
+            Err(e) => {
+                error_messages.push(format!("Ping: {}", e));
+                Vec::new()
+            }
         };
 
         let data = MonitoringData {
@@ -112,7 +174,11 @@ impl MonitoringService {
         };
 
         if !error_messages.is_empty() {
-            warn!("⚠️ Encountered {} errors during monitoring: {}", error_messages.len(), error_messages.join(" | "));
+            warn!(
+                "⚠️ Encountered {} errors during monitoring: {}",
+                error_messages.len(),
+                error_messages.join(" | ")
+            );
             if error_messages.len() >= 2 {
                 let error = error_messages.join(" | ");
                 return Err(anyhow::anyhow!(error));
@@ -145,7 +211,12 @@ impl MonitoringService {
             model = sections[3].trim().to_string();
         }
 
-        CpuInfo { usage_percent, load_average, cores, model }
+        CpuInfo {
+            usage_percent,
+            load_average,
+            cores,
+            model,
+        }
     }
 
     async fn collect_local_data() -> Result<MonitoringData> {
@@ -156,31 +227,71 @@ impl MonitoringService {
         // Collect monitoring data for local machine
         let cpu = match Self::get_local_cpu_info().await {
             Ok(cpu) => cpu,
-            Err(e) => { error_messages.push(format!("CPU: {}", e)); CpuInfo { usage_percent: 0.0, load_average: [0.0, 0.0, 0.0], cores: 0, model: String::new() } }
+            Err(e) => {
+                error_messages.push(format!("CPU: {}", e));
+                CpuInfo {
+                    usage_percent: 0.0,
+                    load_average: [0.0, 0.0, 0.0],
+                    cores: 0,
+                    model: String::new(),
+                }
+            }
         };
         let memory = match Self::get_local_memory_info().await {
             Ok(mem) => mem,
-            Err(e) => { error_messages.push(format!("Memory: {}", e)); MemoryInfo { total: 0, used: 0, free: 0, available: 0, swap_total: 0, swap_used: 0, swap_free: 0 } }
+            Err(e) => {
+                error_messages.push(format!("Memory: {}", e));
+                MemoryInfo {
+                    total: 0,
+                    used: 0,
+                    free: 0,
+                    available: 0,
+                    swap_total: 0,
+                    swap_used: 0,
+                    swap_free: 0,
+                }
+            }
         };
         let disks = match Self::get_local_disk_info().await {
             Ok(d) => d,
-            Err(e) => { error_messages.push(format!("Disks: {}", e)); Vec::new() }
+            Err(e) => {
+                error_messages.push(format!("Disks: {}", e));
+                Vec::new()
+            }
         };
         let network = match Self::get_local_network_info().await {
             Ok(n) => n,
-            Err(e) => { error_messages.push(format!("Network: {}", e)); Vec::new() }
+            Err(e) => {
+                error_messages.push(format!("Network: {}", e));
+                Vec::new()
+            }
         };
         let ports = match Self::get_local_port_info().await {
             Ok(p) => p,
-            Err(e) => { error_messages.push(format!("Ports: {}", e)); Vec::new() }
+            Err(e) => {
+                error_messages.push(format!("Ports: {}", e));
+                Vec::new()
+            }
         };
         let system_info = match Self::get_local_system_info().await {
             Ok(s) => s,
-            Err(e) => { error_messages.push(format!("System: {}", e)); SystemInfo { hostname: String::new(), os: String::new(), kernel: String::new(), uptime: 0, architecture: String::new() } }
+            Err(e) => {
+                error_messages.push(format!("System: {}", e));
+                SystemInfo {
+                    hostname: String::new(),
+                    os: String::new(),
+                    kernel: String::new(),
+                    uptime: 0,
+                    architecture: String::new(),
+                }
+            }
         };
         let ping_tests = match Self::run_local_ping_tests().await {
             Ok(p) => p,
-            Err(e) => { error_messages.push(format!("Ping: {}", e)); Vec::new() }
+            Err(e) => {
+                error_messages.push(format!("Ping: {}", e));
+                Vec::new()
+            }
         };
 
         let data = MonitoringData {
@@ -205,13 +316,13 @@ impl MonitoringService {
 
     pub async fn start_monitoring_loop(app_state: Arc<AppState>) -> Result<()> {
         let ssh_manager = Arc::new(SshConnectionManager::new(app_state.clone()));
-        
+
         loop {
             let servers = {
                 let servers = app_state.servers.read().unwrap();
                 servers.clone()
             };
-            
+
             for (_, server) in servers.iter() {
                 // Skip paused servers
                 if app_state.is_server_paused(&server.id) {
@@ -223,7 +334,7 @@ impl MonitoringService {
                     let server = server.clone();
                     let ssh_manager = ssh_manager.clone();
                     let app_state = app_state.clone();
-                    
+
                     // Create a job for this monitoring task
                     let job_id = uuid::Uuid::new_v4().to_string();
                     let job = MonitoringJob {
@@ -251,32 +362,52 @@ impl MonitoringService {
                             Ok(_) => {
                                 let duration = start.elapsed().as_millis() as u64;
                                 let metrics = vec![
-                                    "cpu".to_string(), "memory".to_string(), "disks".to_string(),
-                                    "network".to_string(), "ports".to_string(), "system".to_string(),
+                                    "cpu".to_string(),
+                                    "memory".to_string(),
+                                    "disks".to_string(),
+                                    "network".to_string(),
+                                    "ports".to_string(),
+                                    "system".to_string(),
                                     "ping".to_string(),
                                 ];
-                                app_state.update_job_status(&job_id, JobStatus::Completed, None, Some(duration), Some(metrics));
+                                app_state.update_job_status(
+                                    &job_id,
+                                    JobStatus::Completed,
+                                    None,
+                                    Some(duration),
+                                    Some(metrics),
+                                );
                             }
                             Err(e) => {
                                 let duration = start.elapsed().as_millis() as u64;
                                 error!("❌ Failed to monitor server {}: {}", server.id, e);
-                                app_state.update_job_status(&job_id, JobStatus::Failed, Some(e.to_string()), Some(duration), None);
+                                app_state.update_job_status(
+                                    &job_id,
+                                    JobStatus::Failed,
+                                    Some(e.to_string()),
+                                    Some(duration),
+                                    None,
+                                );
                             }
                         }
                     });
                 }
             }
-            
+
             // Clean up inactive connections
             ssh_manager.cleanup_inactive_connections().await;
-            
+
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
     }
 
-    async fn monitor_server(ssh_manager: &SshConnectionManager, server: &Server, app_state: &AppState) -> Result<()> {
+    async fn monitor_server(
+        ssh_manager: &SshConnectionManager,
+        server: &Server,
+        app_state: &AppState,
+    ) -> Result<()> {
         info!("🔍 Starting monitoring for server: {}", server.name);
-        
+
         // Update server status to connecting
         {
             let mut servers = app_state.servers.write().unwrap();
@@ -288,54 +419,41 @@ impl MonitoringService {
         match Self::collect_data(ssh_manager, server).await {
             Ok(data) => {
                 info!("📊 Successfully collected data for server: {}", server.name);
-                
+
                 // Update server status to online
                 {
                     let mut servers = app_state.servers.write().unwrap();
                     if let Some(s) = servers.get_mut(&server.id) {
                         s.status = crate::models::ServerStatus::Online;
                         s.last_seen = Some(chrono::Utc::now());
-                        s.next_monitoring = chrono::Utc::now().timestamp() as u64 + s.monitoring_interval.as_secs();
+                        s.next_monitoring =
+                            chrono::Utc::now().timestamp() as u64 + s.monitoring_interval.as_secs();
                     }
                 }
-                
+
                 // Store monitoring data
                 app_state.add_monitoring_data(server.id.clone(), data);
                 info!("✅ Server {} monitored successfully", server.name);
             }
             Err(e) => {
-                warn!("⚠️ Failed to collect data for server {}: {}", server.name, e);
-                
+                warn!(
+                    "⚠️ Failed to collect data for server {}: {}",
+                    server.name, e
+                );
+
                 // Update server status to error
                 {
                     let mut servers = app_state.servers.write().unwrap();
                     if let Some(s) = servers.get_mut(&server.id) {
                         s.status = crate::models::ServerStatus::Error(e.to_string());
-                        s.next_monitoring = chrono::Utc::now().timestamp() as u64 + s.monitoring_interval.as_secs();
+                        s.next_monitoring =
+                            chrono::Utc::now().timestamp() as u64 + s.monitoring_interval.as_secs();
                     }
                 }
             }
         }
-        
+
         Ok(())
-    }
-
-    async fn get_port_info(ssh_manager: &SshConnectionManager, server: &Server) -> Result<Vec<PortInfo>> {
-        // Try netstat first
-        if let Ok(output) = ssh_manager.execute_command(server, "netstat -tuln").await {
-            if let Ok(ports) = Self::parse_netstat(&output) {
-                return Ok(ports);
-            }
-        }
-
-        // Try ss as fallback
-        if let Ok(output) = ssh_manager.execute_command(server, "ss -tuln").await {
-            if let Ok(ports) = Self::parse_ss(&output) {
-                return Ok(ports);
-            }
-        }
-
-        Ok(vec![])
     }
 
     fn parse_netstat(output: &str) -> Result<Vec<PortInfo>> {
@@ -347,8 +465,8 @@ impl MonitoringService {
             if parts.len() >= 4 {
                 let protocol = parts[0].to_lowercase();
                 let local_address = parts[3];
-                
-                if let Some(port_str) = local_address.split(':').last() {
+
+                if let Some(port_str) = local_address.split(':').next_back() {
                     if let Ok(port) = port_str.parse::<u16>() {
                         ports.push(PortInfo {
                             port,
@@ -365,18 +483,13 @@ impl MonitoringService {
         Ok(ports)
     }
 
-    fn parse_ss(_output: &str) -> Result<Vec<PortInfo>> {
-        // Similar to netstat parsing
-        Ok(vec![])
-    }
-
     fn parse_ss_output(output: &str) -> Result<Vec<PortInfo>> {
         let mut ports = Vec::new();
         for line in output.lines().skip(1) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 5 {
                 let local_addr = parts[4];
-                if let Some(port_str) = local_addr.split(':').last() {
+                if let Some(port_str) = local_addr.split(':').next_back() {
                     if let Ok(port) = port_str.parse::<u16>() {
                         ports.push(PortInfo {
                             port,
@@ -392,10 +505,14 @@ impl MonitoringService {
         Ok(ports)
     }
 
-    async fn run_ping_tests_combined(ssh_manager: &SshConnectionManager, server: &Server) -> Result<Vec<PingTest>> {
+    async fn run_ping_tests_combined(
+        ssh_manager: &SshConnectionManager,
+        server: &Server,
+    ) -> Result<Vec<PingTest>> {
         let targets = ["8.8.8.8", "1.1.1.1", "google.com", "github.com"];
         // Combine all ping commands into a single SSH call
-        let combined = targets.iter()
+        let combined = targets
+            .iter()
             .map(|t| format!("ping -c 1 -W 3 {} 2>&1 || true", t))
             .collect::<Vec<_>>()
             .join("; echo '---PING_SEP---'; ");
@@ -407,15 +524,30 @@ impl MonitoringService {
                 for (i, target) in targets.iter().enumerate() {
                     let section = sections.get(i).unwrap_or(&"");
                     if let Some(latency) = Self::extract_ping_latency(section) {
-                        ping_tests.push(PingTest { target: target.to_string(), latency_ms: Some(latency), success: true, error: None });
+                        ping_tests.push(PingTest {
+                            target: target.to_string(),
+                            latency_ms: Some(latency),
+                            success: true,
+                            error: None,
+                        });
                     } else {
-                        ping_tests.push(PingTest { target: target.to_string(), latency_ms: None, success: false, error: Some("No response".to_string()) });
+                        ping_tests.push(PingTest {
+                            target: target.to_string(),
+                            latency_ms: None,
+                            success: false,
+                            error: Some("No response".to_string()),
+                        });
                     }
                 }
             }
             Err(e) => {
                 for target in &targets {
-                    ping_tests.push(PingTest { target: target.to_string(), latency_ms: None, success: false, error: Some(e.to_string()) });
+                    ping_tests.push(PingTest {
+                        target: target.to_string(),
+                        latency_ms: None,
+                        success: false,
+                        error: Some(e.to_string()),
+                    });
                 }
             }
         }
@@ -450,11 +582,7 @@ impl MonitoringService {
     fn parse_load_average(output: &str) -> Result<[f64; 3]> {
         let parts: Vec<&str> = output.split_whitespace().collect();
         if parts.len() >= 3 {
-            Ok([
-                parts[0].parse()?,
-                parts[1].parse()?,
-                parts[2].parse()?,
-            ])
+            Ok([parts[0].parse()?, parts[1].parse()?, parts[2].parse()?])
         } else {
             Ok([0.0, 0.0, 0.0])
         }
@@ -462,8 +590,13 @@ impl MonitoringService {
 
     fn parse_meminfo(output: &str) -> Result<MemoryInfo> {
         let mut mem = MemoryInfo {
-            total: 0, used: 0, free: 0, available: 0,
-            swap_total: 0, swap_used: 0, swap_free: 0,
+            total: 0,
+            used: 0,
+            free: 0,
+            available: 0,
+            swap_total: 0,
+            swap_used: 0,
+            swap_free: 0,
         };
 
         for line in output.lines() {
@@ -503,8 +636,12 @@ impl MonitoringService {
                 let filesystem = if parts.len() > 6 { parts[6] } else { "unknown" };
 
                 disks.push(DiskInfo {
-                    device, mount_point, total, used,
-                    free: available, usage_percent,
+                    device,
+                    mount_point,
+                    total,
+                    used,
+                    free: available,
+                    usage_percent,
                     filesystem: filesystem.to_string(),
                 });
             }
@@ -570,8 +707,10 @@ impl MonitoringService {
     async fn get_local_cpu_info() -> Result<CpuInfo> {
         let output_str = tokio::fs::read_to_string("/proc/stat").await?;
         let lines: Vec<&str> = output_str.lines().collect();
-        let cpu_line = lines.get(0).ok_or_else(|| anyhow::anyhow!("No CPU line found"))?;
-        
+        let cpu_line = lines
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No CPU line found"))?;
+
         let re = Regex::new(r"cpu\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")?;
         if let Some(caps) = re.captures(cpu_line) {
             let user: u64 = caps.get(1).unwrap().as_str().parse()?;
@@ -590,12 +729,23 @@ impl MonitoringService {
                 0.0
             };
 
-            let load_str = tokio::fs::read_to_string("/proc/loadavg").await.unwrap_or_default();
+            let load_str = tokio::fs::read_to_string("/proc/loadavg")
+                .await
+                .unwrap_or_default();
             let load_parts: Vec<&str> = load_str.split_whitespace().collect();
             let load_average = [
-                load_parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                load_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                load_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                load_parts
+                    .first()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0),
+                load_parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0),
+                load_parts
+                    .get(2)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0),
             ];
 
             let cores_output = tokio::process::Command::new("nproc").output().await?;
@@ -604,7 +754,9 @@ impl MonitoringService {
                 .parse()
                 .unwrap_or(1);
 
-            let cpuinfo_str = tokio::fs::read_to_string("/proc/cpuinfo").await.unwrap_or_default();
+            let cpuinfo_str = tokio::fs::read_to_string("/proc/cpuinfo")
+                .await
+                .unwrap_or_default();
             let model = cpuinfo_str
                 .lines()
                 .find(|line| line.starts_with("model name"))
@@ -663,14 +815,14 @@ impl MonitoringService {
             .arg("--output=source,target,fstype,size,used,avail,pcent")
             .output()
             .await?;
-        
+
         if !output.status.success() {
             return Err(anyhow::anyhow!("Failed to run df command"));
         }
-        
+
         let output_str = String::from_utf8(output.stdout)?;
         let mut disks = Vec::new();
-        
+
         for line in output_str.lines().skip(1) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 7 {
@@ -681,7 +833,7 @@ impl MonitoringService {
                 let used_str = parts[4].replace("G", "").replace("M", "").replace("K", "");
                 let free_str = parts[5].replace("G", "").replace("M", "").replace("K", "");
                 let usage_str = parts[6].replace("%", "");
-                
+
                 if let (Ok(total), Ok(used), Ok(free), Ok(usage_percent)) = (
                     total_str.parse::<f64>(),
                     used_str.parse::<f64>(),
@@ -700,14 +852,14 @@ impl MonitoringService {
                 }
             }
         }
-        
+
         Ok(disks)
     }
 
     async fn get_local_network_info() -> Result<Vec<NetworkInfo>> {
         let output_str = tokio::fs::read_to_string("/proc/net/dev").await?;
         let mut networks = Vec::new();
-        
+
         for line in output_str.lines().skip(2) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 10 {
@@ -718,7 +870,7 @@ impl MonitoringService {
                 let tx_bytes = parts[9].parse().unwrap_or(0);
                 let tx_packets = parts[10].parse().unwrap_or(0);
                 let tx_errors = parts[11].parse().unwrap_or(0);
-                
+
                 networks.push(NetworkInfo {
                     interface,
                     rx_bytes,
@@ -731,7 +883,7 @@ impl MonitoringService {
                 });
             }
         }
-        
+
         Ok(networks)
     }
 
@@ -740,20 +892,20 @@ impl MonitoringService {
             .arg("-tuln")
             .output()
             .await?;
-        
+
         if !output.status.success() {
             return Err(anyhow::anyhow!("Failed to run ss command"));
         }
-        
+
         let output_str = String::from_utf8(output.stdout)?;
         let mut ports = Vec::new();
-        
+
         for line in output_str.lines().skip(1) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 5 {
                 let state = parts[1].to_string();
                 let local_addr = parts[4];
-                if let Some(port_str) = local_addr.split(':').last() {
+                if let Some(port_str) = local_addr.split(':').next_back() {
                     if let Ok(port) = port_str.parse::<u16>() {
                         ports.push(PortInfo {
                             port,
@@ -766,7 +918,7 @@ impl MonitoringService {
                 }
             }
         }
-        
+
         Ok(ports)
     }
 
@@ -779,7 +931,7 @@ impl MonitoringService {
             .unwrap_or_default()
             .trim()
             .to_string();
-        
+
         let os = tokio::process::Command::new("uname")
             .arg("-s")
             .output()
@@ -789,7 +941,7 @@ impl MonitoringService {
             .unwrap_or_default()
             .trim()
             .to_string();
-        
+
         let kernel = tokio::process::Command::new("uname")
             .arg("-r")
             .output()
@@ -799,14 +951,16 @@ impl MonitoringService {
             .unwrap_or_default()
             .trim()
             .to_string();
-        
-        let uptime_str = tokio::fs::read_to_string("/proc/uptime").await.unwrap_or_default();
+
+        let uptime_str = tokio::fs::read_to_string("/proc/uptime")
+            .await
+            .unwrap_or_default();
         let uptime = uptime_str
             .split_whitespace()
             .next()
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0) as u64;
-        
+
         let architecture = tokio::process::Command::new("uname")
             .arg("-m")
             .output()
@@ -816,7 +970,7 @@ impl MonitoringService {
             .unwrap_or_default()
             .trim()
             .to_string();
-        
+
         Ok(SystemInfo {
             hostname,
             os,
@@ -827,20 +981,15 @@ impl MonitoringService {
     }
 
     async fn run_local_ping_tests() -> Result<Vec<PingTest>> {
-        let targets = vec![
-            "8.8.8.8",
-            "1.1.1.1",
-            "google.com",
-            "github.com",
-        ];
-        
+        let targets = vec!["8.8.8.8", "1.1.1.1", "google.com", "github.com"];
+
         // Run all pings concurrently with timeout
         let mut handles = Vec::new();
         for target in &targets {
             let t = target.to_string();
-            handles.push(tokio::spawn(async move {
-                Self::ping_local_target(&t).await
-            }));
+            handles.push(tokio::spawn(
+                async move { Self::ping_local_target(&t).await },
+            ));
         }
 
         let mut ping_tests = Vec::new();
@@ -855,7 +1004,7 @@ impl MonitoringService {
                 }),
             }
         }
-        
+
         Ok(ping_tests)
     }
 
@@ -864,8 +1013,9 @@ impl MonitoringService {
             tokio::time::Duration::from_secs(3),
             tokio::process::Command::new("ping")
                 .args(["-c", "1", "-W", "2", target])
-                .output()
-        ).await;
+                .output(),
+        )
+        .await;
 
         match result {
             Ok(Ok(output)) => {
