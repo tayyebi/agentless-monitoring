@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::Duration;
 use tracing::warn;
 
@@ -79,13 +79,13 @@ pub struct Server {
     pub last_seen: Option<DateTime<Utc>>,
     pub status: ServerStatus,
     pub monitoring_interval: Duration,
-    pub next_monitoring: u64, // Unix timestamp for next monitoring
+    pub next_monitoring: u64,          // Unix timestamp for next monitoring
     pub connection_id: Option<String>, // For persistent connections
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthMethod {
-    SshConfig, // Use default SSH config
+    SshConfig,        // Use default SSH config
     Password(String), // For servers that need password authentication
 }
 
@@ -225,9 +225,9 @@ impl AppState {
     pub async fn new(config: AppConfig) -> anyhow::Result<Self> {
         // Find SSH config path
         let ssh_config_path = Self::find_ssh_config_path().await?;
-        
+
         let mut servers = HashMap::new();
-        
+
         // Add local machine as first server
         let now = chrono::Utc::now();
         let local_server = Server {
@@ -247,7 +247,7 @@ impl AppState {
             connection_id: None,
         };
         servers.insert("local".to_string(), local_server);
-        
+
         Ok(Self {
             servers: Arc::new(RwLock::new(servers)),
             monitoring_data: Arc::new(RwLock::new(HashMap::new())),
@@ -269,7 +269,7 @@ impl AppState {
             .args(["-F", "/dev/null", "-G", "localhost"])
             .output()
             .await?;
-        
+
         if output.status.success() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
@@ -282,16 +282,19 @@ impl AppState {
                 }
             }
         }
-        
+
         // Fallback to default path
-        Ok(format!("{}/.ssh/config", std::env::var("HOME").unwrap_or_else(|_| "/root".to_string())))
+        Ok(format!(
+            "{}/.ssh/config",
+            std::env::var("HOME").unwrap_or_else(|_| "/root".to_string())
+        ))
     }
 
     pub fn add_monitoring_data(&self, server_id: String, data: MonitoringData) {
         let mut monitoring_data = self.monitoring_data.write().unwrap();
-        let server_data = monitoring_data.entry(server_id).or_insert_with(Vec::new);
+        let server_data = monitoring_data.entry(server_id).or_default();
         server_data.push(data);
-        
+
         // Keep only last 1000 entries per server for historical records
         if server_data.len() > 1000 {
             server_data.drain(0..server_data.len() - 1000);
@@ -300,7 +303,9 @@ impl AppState {
 
     pub fn get_latest_monitoring_data(&self, server_id: &str) -> Option<MonitoringData> {
         let monitoring_data = self.monitoring_data.read().unwrap();
-        monitoring_data.get(server_id).and_then(|data| data.last().cloned())
+        monitoring_data
+            .get(server_id)
+            .and_then(|data| data.last().cloned())
     }
 
     pub fn get_historical_data(&self, server_id: &str, limit: usize) -> Vec<MonitoringData> {
@@ -313,22 +318,27 @@ impl AppState {
     }
 
     pub async fn load_servers_from_ssh_config(&self) -> anyhow::Result<()> {
-        let config = self.server_config.read().unwrap();
-        let ssh_config_path = &config.ssh_config_path;
-        
+        let ssh_config_path = {
+            let config = self.server_config.read().unwrap();
+            config.ssh_config_path.clone()
+        };
+
         // Parse SSH config file
-        let hosts = Self::parse_ssh_config(ssh_config_path).await?;
-        
+        let hosts = Self::parse_ssh_config(&ssh_config_path).await?;
+
         let mut servers = self.servers.write().unwrap();
         // Don't clear existing servers - keep the local machine
-        
+
         for (i, host) in hosts.iter().enumerate() {
             // Skip hosts with empty hostnames or usernames
             if host.host.is_empty() || host.username.is_empty() {
-                warn!("⚠️ Skipping host '{}' - missing hostname or username", host.name);
+                warn!(
+                    "⚠️ Skipping host '{}' - missing hostname or username",
+                    host.name
+                );
                 continue;
             }
-            
+
             let server = Server {
                 id: host.name.clone(),
                 name: host.name.clone(),
@@ -347,7 +357,7 @@ impl AppState {
             };
             servers.insert(server.id.clone(), server);
         }
-        
+
         Ok(())
     }
 
@@ -355,13 +365,13 @@ impl AppState {
         let content = tokio::fs::read_to_string(path).await?;
         let mut hosts = Vec::new();
         let mut current_host: Option<SshHost> = None;
-        
+
         for line in content.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            
+
             if line.starts_with("Host ") {
                 if let Some(mut host) = current_host.take() {
                     // Apply SSH config defaults
@@ -378,7 +388,7 @@ impl AppState {
                 current_host = Some(SshHost {
                     name: host_name.to_string(),
                     host: String::new(),
-                    port: 22, // Default SSH port
+                    port: 22,                     // Default SSH port
                     username: whoami::username(), // Default to current user
                 });
             } else if let Some(host) = &mut current_host {
@@ -393,7 +403,7 @@ impl AppState {
                 }
             }
         }
-        
+
         if let Some(mut host) = current_host {
             // Apply SSH config defaults
             if host.host.is_empty() {
@@ -405,23 +415,28 @@ impl AppState {
             // Port already defaults to 22
             hosts.push(host);
         }
-        
+
         Ok(hosts)
     }
 
     pub fn get_connection_id(&self, server_id: &str) -> Option<String> {
         let connections = self.ssh_connections.read().unwrap();
-        connections.get(server_id).map(|conn| conn.connection_id.clone())
+        connections
+            .get(server_id)
+            .map(|conn| conn.connection_id.clone())
     }
 
     pub fn set_connection_id(&self, server_id: String, connection_id: String) {
         let mut connections = self.ssh_connections.write().unwrap();
-        connections.insert(server_id.clone(), SshConnectionInfo {
-            server_id,
-            connection_id,
-            last_used: chrono::Utc::now().timestamp() as u64,
-            is_active: true,
-        });
+        connections.insert(
+            server_id.clone(),
+            SshConnectionInfo {
+                server_id,
+                connection_id,
+                last_used: chrono::Utc::now().timestamp() as u64,
+                is_active: true,
+            },
+        );
     }
 
     pub fn update_connection_usage(&self, server_id: &str) {
@@ -448,7 +463,14 @@ impl AppState {
         }
     }
 
-    pub fn update_job_status(&self, job_id: &str, status: JobStatus, error: Option<String>, duration_ms: Option<u64>, metrics: Option<Vec<String>>) {
+    pub fn update_job_status(
+        &self,
+        job_id: &str,
+        status: JobStatus,
+        error: Option<String>,
+        duration_ms: Option<u64>,
+        metrics: Option<Vec<String>>,
+    ) {
         let mut jobs = self.jobs.write().unwrap();
         if let Some(job) = jobs.iter_mut().find(|j| j.id == job_id) {
             job.status = status.clone();
@@ -470,12 +492,12 @@ impl AppState {
         }
     }
 
-    pub fn get_jobs(&self, limit: usize) -> Vec<MonitoringJob> {
-        let jobs = self.jobs.read().unwrap();
-        jobs.iter().rev().take(limit).cloned().collect()
-    }
-
-    pub fn get_jobs_filtered(&self, limit: usize, status_filter: Option<&str>, server_filter: Option<&str>) -> Vec<MonitoringJob> {
+    pub fn get_jobs_filtered(
+        &self,
+        limit: usize,
+        status_filter: Option<&str>,
+        server_filter: Option<&str>,
+    ) -> Vec<MonitoringJob> {
         let jobs = self.jobs.read().unwrap();
         jobs.iter()
             .rev()
@@ -501,18 +523,39 @@ impl AppState {
     pub fn get_job_statistics(&self) -> JobStatistics {
         let jobs = self.jobs.read().unwrap();
         let total = jobs.len();
-        let completed = jobs.iter().filter(|j| j.status == JobStatus::Completed).count();
-        let failed = jobs.iter().filter(|j| j.status == JobStatus::Failed).count();
-        let running = jobs.iter().filter(|j| j.status == JobStatus::Running).count();
-        let pending = jobs.iter().filter(|j| j.status == JobStatus::Pending).count();
-        let cancelled = jobs.iter().filter(|j| j.status == JobStatus::Cancelled).count();
+        let completed = jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Completed)
+            .count();
+        let failed = jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Failed)
+            .count();
+        let running = jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Running)
+            .count();
+        let pending = jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Pending)
+            .count();
+        let cancelled = jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Cancelled)
+            .count();
 
         let avg_duration = {
-            let completed_jobs: Vec<&MonitoringJob> = jobs.iter().filter(|j| j.status == JobStatus::Completed && j.duration_ms.is_some()).collect();
+            let completed_jobs: Vec<&MonitoringJob> = jobs
+                .iter()
+                .filter(|j| j.status == JobStatus::Completed && j.duration_ms.is_some())
+                .collect();
             if completed_jobs.is_empty() {
                 0.0
             } else {
-                let total_duration: u64 = completed_jobs.iter().map(|j| j.duration_ms.unwrap_or(0)).sum();
+                let total_duration: u64 = completed_jobs
+                    .iter()
+                    .map(|j| j.duration_ms.unwrap_or(0))
+                    .sum();
                 total_duration as f64 / completed_jobs.len() as f64
             }
         };
@@ -604,5 +647,3 @@ struct SshHost {
     port: u16,
     username: String,
 }
-
-

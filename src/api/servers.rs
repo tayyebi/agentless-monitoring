@@ -1,22 +1,22 @@
 use anyhow::Result;
 use axum::{
-    extract::{Path, State, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use uuid::Uuid;
 use std::collections::HashMap;
 
 use crate::models::{AppState, Server, ServerStatus};
-use crate::ssh::{SshConnection, SshConnectionManager};
-use crate::monitoring::MonitoringService;
+use crate::ssh::SshConnection;
 
-pub async fn list_servers(State(state): State<std::sync::Arc<AppState>>) -> Result<Json<Value>, StatusCode> {
+pub async fn list_servers(
+    State(state): State<std::sync::Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
     let servers = state.servers.read().unwrap();
     let mut servers: Vec<Server> = servers.values().cloned().collect();
-    
+
     // Sort servers: local machine first, then others in creation order
     servers.sort_by(|a, b| {
         if a.id == "local" {
@@ -28,43 +28,8 @@ pub async fn list_servers(State(state): State<std::sync::Arc<AppState>>) -> Resu
             a.created_at.cmp(&b.created_at)
         }
     });
-    
+
     Ok(Json(json!(servers)))
-}
-
-pub async fn create_server(
-    State(state): State<std::sync::Arc<AppState>>,
-    Json(server): Json<CreateServerRequest>,
-) -> Result<Json<Value>, StatusCode> {
-    let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
-
-    let server = Server {
-        id: id.clone(),
-        name: server.name,
-        host: server.host,
-        port: server.port,
-        username: server.username,
-        auth_method: server.auth_method,
-        proxy_config: server.proxy_config,
-        created_at: now,
-        updated_at: now,
-        last_seen: None,
-        status: ServerStatus::Offline,
-        monitoring_interval: std::time::Duration::from_secs(30),
-        next_monitoring: chrono::Utc::now().timestamp() as u64,
-        connection_id: None,
-    };
-
-    {
-        let mut servers = state.servers.write().unwrap();
-        servers.insert(id.clone(), server);
-    }
-
-    Ok(Json(json!({
-        "id": id,
-        "message": "Server created successfully"
-    })))
 }
 
 pub async fn get_server(
@@ -76,49 +41,6 @@ pub async fn get_server(
         Some(server) => Ok(Json(json!(server))),
         None => Err(StatusCode::NOT_FOUND),
     }
-}
-
-pub async fn update_server(
-    State(state): State<std::sync::Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(update): Json<UpdateServerRequest>,
-) -> Result<Json<Value>, StatusCode> {
-    let now = chrono::Utc::now();
-
-    {
-        let mut servers = state.servers.write().unwrap();
-        if let Some(server) = servers.get_mut(&id) {
-            server.name = update.name;
-            server.host = update.host;
-            server.port = update.port;
-            server.username = update.username;
-            server.auth_method = update.auth_method;
-            server.proxy_config = update.proxy_config;
-            server.updated_at = now;
-        } else {
-            return Err(StatusCode::NOT_FOUND);
-        }
-    }
-
-    Ok(Json(json!({
-        "message": "Server updated successfully"
-    })))
-}
-
-pub async fn delete_server(
-    State(state): State<std::sync::Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    {
-        let mut servers = state.servers.write().unwrap();
-        if servers.remove(&id).is_none() {
-            return Err(StatusCode::NOT_FOUND);
-        }
-    }
-
-    Ok(Json(json!({
-        "message": "Server deleted successfully"
-    })))
 }
 
 #[derive(Deserialize)]
@@ -208,75 +130,19 @@ pub async fn connect_server(
     }
 }
 
-pub async fn monitor_server(
-    State(state): State<std::sync::Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    // Get server details
-    let server = {
-        let servers = state.servers.read().unwrap();
-        servers.get(&id).cloned()
-    };
-
-    let server = match server {
-        Some(server) => server,
-        None => return Err(StatusCode::NOT_FOUND),
-    };
-
-    // Get fallback password from config
-    let fallback_password = {
-        let server_config = state.server_config.read().unwrap();
-        server_config.fallback_password.clone()
-    };
-
-    // Create SSH connection
-    let connection = if let Some(proxy_config) = &server.proxy_config {
-        SshConnection::new_with_proxy(&server, proxy_config).await
-    } else {
-        SshConnection::new_with_fallback(&server, fallback_password).await
-    };
-
-    match connection {
-        Ok(_conn) => {
-            let ssh_manager = SshConnectionManager::new(state.clone());
-            match MonitoringService::collect_data(&ssh_manager, &server).await {
-                Ok(mut data) => {
-                    // Store monitoring data
-                    data.server_id = id.clone();
-                    state.add_monitoring_data(id.clone(), data.clone());
-
-                    Ok(Json(json!(data)))
-                }
-                Err(e) => {
-                    Ok(Json(json!({
-                        "error": e.to_string()
-                    })))
-                }
-            }
-        }
-        Err(e) => {
-            Ok(Json(json!({
-                "error": e.to_string()
-            })))
-        }
-    }
-}
-
 pub async fn get_server_status(
     State(state): State<std::sync::Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     let servers = state.servers.read().unwrap();
     match servers.get(&id) {
-        Some(server) => {
-            Ok(Json(json!({
-                "id": server.id,
-                "name": server.name,
-                "status": server.status,
-                "last_seen": server.last_seen,
-                "is_connected": false
-            })))
-        }
+        Some(server) => Ok(Json(json!({
+            "id": server.id,
+            "name": server.name,
+            "status": server.status,
+            "last_seen": server.last_seen,
+            "is_connected": false
+        }))),
         None => Err(StatusCode::NOT_FOUND),
     }
 }
@@ -289,7 +155,7 @@ pub async fn get_connection_stats(
     let mut oldest_connection_age = 0u64;
     let mut youngest_connection_age = 0u64;
     let now = chrono::Utc::now().timestamp() as u64;
-    
+
     for server in servers.values() {
         if let Some(last_seen) = server.last_seen {
             active_connections += 1;
@@ -302,7 +168,7 @@ pub async fn get_connection_stats(
             }
         }
     }
-    
+
     Ok(Json(json!({
         "active_connections": active_connections,
         "oldest_connection_age_seconds": oldest_connection_age,
@@ -311,7 +177,7 @@ pub async fn get_connection_stats(
 }
 
 pub async fn get_config_info(
-    State(state): State<std::sync::Arc<AppState>>
+    State(state): State<std::sync::Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     let config = state.server_config.read().unwrap();
     Ok(Json(json!({
@@ -320,16 +186,16 @@ pub async fn get_config_info(
 }
 
 pub async fn get_connection_pool_details(
-    State(state): State<std::sync::Arc<AppState>>
+    State(state): State<std::sync::Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     let servers = state.servers.read().unwrap();
     let ssh_connections = state.ssh_connections.read().unwrap();
     let now = chrono::Utc::now().timestamp() as u64;
-    
+
     let mut server_connections = Vec::new();
     let mut active_ssh_connections = 0;
-    let mut total_ssh_connections = ssh_connections.len();
-    
+    let total_ssh_connections = ssh_connections.len();
+
     for server in servers.values() {
         let status = match &server.status {
             crate::models::ServerStatus::Online => "Online",
@@ -337,14 +203,13 @@ pub async fn get_connection_pool_details(
             crate::models::ServerStatus::Connecting => "Connecting",
             crate::models::ServerStatus::Error(_) => "Error",
         };
-        
-        let last_seen_age = server.last_seen.map(|ls| now - ls.timestamp() as u64).unwrap_or(0);
-        let next_monitoring_age = if server.next_monitoring > now {
-            server.next_monitoring - now
-        } else {
-            0
-        };
-        
+
+        let last_seen_age = server
+            .last_seen
+            .map(|ls| now - ls.timestamp() as u64)
+            .unwrap_or(0);
+        let next_monitoring_age = server.next_monitoring.saturating_sub(now);
+
         server_connections.push(json!({
             "server_id": server.id,
             "server_name": server.name,
@@ -357,14 +222,14 @@ pub async fn get_connection_pool_details(
             "has_ssh_connection": ssh_connections.values().any(|conn| conn.server_id == server.id && conn.is_active)
         }));
     }
-    
+
     // Count active SSH connections
     for conn in ssh_connections.values() {
         if conn.is_active {
             active_ssh_connections += 1;
         }
     }
-    
+
     Ok(Json(json!({
         "server_connections": server_connections,
         "ssh_connection_pool": {
@@ -421,18 +286,10 @@ pub async fn get_server_details(
             }
             Ok(Json(details))
         }
-        None => Ok(Json(json!({ "error": "No monitoring data found for server" }))),
+        None => Ok(Json(
+            json!({ "error": "No monitoring data found for server" }),
+        )),
     }
-}
-
-#[derive(serde::Deserialize)]
-pub struct CreateServerRequest {
-    pub name: String,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub auth_method: crate::models::AuthMethod,
-    pub proxy_config: Option<crate::models::ProxyConfig>,
 }
 
 pub async fn get_server_history(
@@ -444,7 +301,7 @@ pub async fn get_server_history(
         .get("limit")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(100);
-    
+
     let historical_data = state.get_historical_data(&id, limit);
     Ok(Json(json!(historical_data)))
 }
@@ -521,8 +378,11 @@ pub async fn clear_jobs(
     State(state): State<std::sync::Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, StatusCode> {
-    let clear_type = params.get("type").map(|s| s.as_str()).unwrap_or("completed");
-    
+    let clear_type = params
+        .get("type")
+        .map(|s| s.as_str())
+        .unwrap_or("completed");
+
     let cleared = match clear_type {
         "completed" => state.clear_completed_jobs(),
         "failed" => state.clear_failed_jobs(),
@@ -549,11 +409,11 @@ pub async fn pause_all_monitoring(
     let servers = state.servers.read().unwrap();
     let server_ids: Vec<String> = servers.keys().cloned().collect();
     drop(servers);
-    
+
     for id in &server_ids {
         state.pause_server(id);
     }
-    
+
     Ok(Json(json!({
         "message": format!("Paused monitoring for {} servers", server_ids.len()),
         "paused_count": server_ids.len()
@@ -567,23 +427,13 @@ pub async fn resume_all_monitoring(
         let paused = state.paused_servers.read().unwrap();
         paused.iter().cloned().collect()
     };
-    
+
     for id in &paused {
         state.resume_server(id);
     }
-    
+
     Ok(Json(json!({
         "message": format!("Resumed monitoring for {} servers", paused.len()),
         "resumed_count": paused.len()
     })))
-}
-
-#[derive(serde::Deserialize)]
-pub struct UpdateServerRequest {
-    pub name: String,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub auth_method: crate::models::AuthMethod,
-    pub proxy_config: Option<crate::models::ProxyConfig>,
 }

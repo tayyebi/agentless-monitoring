@@ -16,29 +16,25 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
-use tracing::{info, warn, error, Level};
+use tracing::{error, info, warn, Level};
 
 use crate::cli::{Cli, Commands};
-use clap::Parser;
 use crate::config::AppConfig;
 use crate::models::AppState;
+use clap::Parser;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Server { config } => {
-            run_server(config).await
-        }
+        Commands::Server { config } => run_server(config).await,
     }
 }
 
 async fn run_server(config_path: std::path::PathBuf) -> Result<()> {
     // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     // Load configuration
     let config = if config_path.exists() {
@@ -48,7 +44,7 @@ async fn run_server(config_path: std::path::PathBuf) -> Result<()> {
         AppConfig::load()?
     };
     let app_state = Arc::new(AppState::new(config).await?);
-    
+
     // Load servers from SSH config
     if let Err(e) = app_state.load_servers_from_ssh_config().await {
         warn!("🔧 Failed to load servers from SSH config: {}", e);
@@ -59,7 +55,9 @@ async fn run_server(config_path: std::path::PathBuf) -> Result<()> {
     // Start monitoring loop
     let app_state_clone = app_state.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::monitoring::MonitoringService::start_monitoring_loop(app_state_clone).await {
+        if let Err(e) =
+            crate::monitoring::MonitoringService::start_monitoring_loop(app_state_clone).await
+        {
             error!("💥 Monitoring loop failed: {}", e);
         }
     });
@@ -69,20 +67,53 @@ async fn run_server(config_path: std::path::PathBuf) -> Result<()> {
         .route("/", get(index_handler))
         .route("/api/servers", get(api::servers::list_servers))
         .route("/api/servers/:id", get(api::servers::get_server))
-        .route("/api/servers/:id/connect", post(api::servers::connect_server))
-        .route("/api/servers/:id/status", get(api::servers::get_server_status))
-        .route("/api/servers/:id/details/:metric", get(api::servers::get_server_details))
-        .route("/api/servers/:id/history", get(api::servers::get_server_history))
-        .route("/api/servers/:id/start-monitoring", post(api::servers::start_monitoring))
-        .route("/api/servers/:id/stop-monitoring", post(api::servers::stop_monitoring))
+        .route(
+            "/api/servers/:id/connect",
+            post(api::servers::connect_server),
+        )
+        .route(
+            "/api/servers/:id/status",
+            get(api::servers::get_server_status),
+        )
+        .route(
+            "/api/servers/:id/details/:metric",
+            get(api::servers::get_server_details),
+        )
+        .route(
+            "/api/servers/:id/history",
+            get(api::servers::get_server_history),
+        )
+        .route(
+            "/api/servers/:id/start-monitoring",
+            post(api::servers::start_monitoring),
+        )
+        .route(
+            "/api/servers/:id/stop-monitoring",
+            post(api::servers::stop_monitoring),
+        )
         .route("/api/jobs", get(api::servers::list_jobs))
         .route("/api/jobs/:id/cancel", post(api::servers::cancel_job))
         .route("/api/jobs/clear", post(api::servers::clear_jobs))
-        .route("/api/jobs/statistics", get(api::servers::get_job_statistics))
-        .route("/api/monitoring/pause-all", post(api::servers::pause_all_monitoring))
-        .route("/api/monitoring/resume-all", post(api::servers::resume_all_monitoring))
-        .route("/api/connection-stats", get(api::servers::get_connection_stats))
-        .route("/api/connection-pool", get(api::servers::get_connection_pool_details))
+        .route(
+            "/api/jobs/statistics",
+            get(api::servers::get_job_statistics),
+        )
+        .route(
+            "/api/monitoring/pause-all",
+            post(api::servers::pause_all_monitoring),
+        )
+        .route(
+            "/api/monitoring/resume-all",
+            post(api::servers::resume_all_monitoring),
+        )
+        .route(
+            "/api/connection-stats",
+            get(api::servers::get_connection_stats),
+        )
+        .route(
+            "/api/connection-pool",
+            get(api::servers::get_connection_pool_details),
+        )
         .route("/api/config-info", get(api::servers::get_config_info))
         .route("/api/health", get(health_check))
         .nest_service("/static", ServeDir::new("static"))
@@ -91,7 +122,7 @@ async fn run_server(config_path: std::path::PathBuf) -> Result<()> {
 
     let listener = TcpListener::bind("0.0.0.0:8080").await?;
     info!("🚀 Server running on http://0.0.0.0:8080");
-    
+
     axum::serve(listener, app).await?;
     Ok(())
 }
