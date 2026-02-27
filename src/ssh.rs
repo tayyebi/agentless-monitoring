@@ -8,6 +8,12 @@ use tracing::{error, info, warn};
 
 use crate::models::{AppState, AuthMethod, ProxyConfig, Server};
 
+/// Polling interval while waiting for the ControlMaster socket to appear.
+const CONTROL_SOCKET_POLL_MS: u64 = 200;
+
+/// Timeout for `ssh -O check` health probes (seconds).
+const CONTROL_CHECK_TIMEOUT_SECS: u64 = 5;
+
 pub struct SshConnection {
     pub host: String,
     pub port: u16,
@@ -25,6 +31,61 @@ pub struct SshConnectionManager {
 #[derive(Debug)]
 struct SshConnectionInfo {
     pub process: Option<std::process::Child>,
+    pub server_id: String,
+    pub username: String,
+    pub host: String,
+}
+
+/// Returns true if the error string indicates a broken or lost SSH connection
+/// (as opposed to an authentication failure or a remote command error).
+fn is_connection_error(msg: &str) -> bool {
+    msg.contains("ControlSocket")
+        || msg.contains("Broken pipe")
+        || msg.contains("Connection reset")
+        || msg.contains("mux")
+        || msg.contains("Connection refused")
+        || msg.contains("No route to host")
+        || msg.contains("Connection timed out")
+        || msg.contains("ssh_exchange_identification")
+        || msg.contains("kex_exchange_identification")
+}
+
+/// Return the directory used to store ControlMaster sockets.
+///
+/// Preference order:
+///   1. `$XDG_RUNTIME_DIR/agentless-monitor`  (user-specific, mode 700 on most distros)
+///   2. `$HOME/.ssh/control`                   (typically mode 700)
+///
+/// The directory is created with mode 0700 on first call if it does not exist.
+fn control_socket_dir() -> String {
+    let dir = if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
+        format!("{}/agentless-monitor", runtime)
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        format!("{}/.ssh/control", home)
+    };
+
+    if !std::path::Path::new(&dir).exists() {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("⚠️ Could not create control socket directory {}: {}", dir, e);
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &dir,
+                    std::fs::Permissions::from_mode(0o700),
+                );
+            }
+        }
+    }
+
+    dir
+}
+
+/// Build the full path for a ControlMaster socket for `connection_id`.
+fn control_socket_path(connection_id: &str) -> String {
+    format!("{}/ssh_{}", control_socket_dir(), connection_id)
 }
 
 impl SshConnection {
@@ -174,6 +235,67 @@ impl SshConnectionManager {
         }
     }
 
+    // ── Synchronous helpers (no lock guard crosses an await point) ──────────
+
+    /// Insert a new connection record. Returns `false` if the pool is full.
+    fn store_connection(&self, connection_id: &str, info: SshConnectionInfo) {
+        let mut connections = self.connections.write().unwrap();
+        connections.insert(connection_id.to_string(), info);
+    }
+
+    /// Check whether the ControlMaster process for `connection_id` is still
+    /// running.  Takes a write lock momentarily so it can call `try_wait`.
+    fn is_process_running(&self, connection_id: &str) -> bool {
+        let mut connections = self.connections.write().unwrap();
+        if let Some(conn) = connections.get_mut(connection_id) {
+            if let Some(ref mut process) = conn.process {
+                return matches!(process.try_wait(), Ok(None));
+            }
+        }
+        false
+    }
+
+    /// Return the (username, host) pair stored for `connection_id`, if any.
+    fn get_connection_hosts(&self, connection_id: &str) -> Option<(String, String)> {
+        let connections = self.connections.read().unwrap();
+        connections
+            .get(connection_id)
+            .map(|c| (c.username.clone(), c.host.clone()))
+    }
+
+    /// Return the current pool size.
+    fn pool_size(&self) -> usize {
+        self.connections.read().unwrap().len()
+    }
+
+    /// Remove a connection from the local map and return its child process (if
+    /// any) so the caller can kill it outside the lock.
+    fn take_connection(&self, connection_id: &str) -> Option<std::process::Child> {
+        let mut connections = self.connections.write().unwrap();
+        connections
+            .remove(connection_id)
+            .and_then(|mut info| info.process.take())
+    }
+
+    /// Collect the IDs of every connection whose ControlMaster process has
+    /// already exited.  Returns `(connection_id, server_id)` pairs.
+    fn find_dead_connections(&self) -> Vec<(String, String)> {
+        let mut connections = self.connections.write().unwrap();
+        connections
+            .iter_mut()
+            .filter_map(|(conn_id, info)| {
+                if let Some(ref mut proc) = info.process {
+                    if let Ok(Some(_)) = proc.try_wait() {
+                        return Some((conn_id.clone(), info.server_id.clone()));
+                    }
+                }
+                None
+            })
+            .collect()
+    }
+
+    // ── Async methods (never hold a lock guard across `.await`) ─────────────
+
     pub async fn get_or_create_connection(&self, server: &Server) -> Result<String> {
         let server_id = server.id.clone();
 
@@ -183,21 +305,16 @@ impl SshConnectionManager {
                 self.app_state.update_connection_usage(&server_id);
                 return Ok(conn_id);
             }
+            // Connection is dead; clean it up before creating a new one
+            self.remove_connection(&conn_id, &server_id).await;
         }
 
         // Check connection pool size limit
-        let should_cleanup = {
-            let connections = self.connections.read().unwrap();
-            connections.len() >= self.max_connections
-        };
-
-        if should_cleanup {
+        if self.pool_size() >= self.max_connections {
             // Clean up inactive connections first
             self.cleanup_inactive_connections().await;
 
-            // Check again after cleanup
-            let connections = self.connections.read().unwrap();
-            if connections.len() >= self.max_connections {
+            if self.pool_size() >= self.max_connections {
                 return Err(anyhow::anyhow!("Connection pool is full"));
             }
         }
@@ -225,7 +342,7 @@ impl SshConnectionManager {
     async fn start_persistent_connection(
         &self,
         connection_id: &str,
-        _server_id: &str,
+        server_id: &str,
         ssh_conn: &SshConnection,
     ) -> Result<()> {
         let ssh_args = ssh_conn.build_ssh_args();
@@ -237,7 +354,7 @@ impl SshConnectionManager {
         cmd.args(&ssh_args)
             .arg("-M") // ControlMaster
             .arg("-S") // ControlPath
-            .arg(format!("/tmp/ssh_control_{}", connection_id))
+            .arg(control_socket_path(connection_id))
             .arg("-N") // No command execution
             .arg(format!("{}@{}", username, host))
             .stdin(std::process::Stdio::piped())
@@ -246,41 +363,117 @@ impl SshConnectionManager {
 
         let process = cmd.spawn()?;
 
-        // Store connection info
-        let mut connections = self.connections.write().unwrap();
-        connections.insert(
-            connection_id.to_string(),
+        // Store connection info via the synchronous helper (no lock held past here).
+        self.store_connection(
+            connection_id,
             SshConnectionInfo {
                 process: Some(process),
+                server_id: server_id.to_string(),
+                username: username.clone(),
+                host: host.clone(),
             },
         );
+
+        // Wait for the control socket to appear so the connection is usable
+        // immediately after this function returns.  Bail out early if the
+        // ControlMaster process exits before the socket is ready (e.g. auth
+        // failure).
+        let control_path = control_socket_path(connection_id);
+        let connection_id_owned = connection_id.to_string();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            // Use the synchronous helper so no lock guard crosses the await.
+            if !self.is_process_running(&connection_id_owned) {
+                return Err(anyhow::anyhow!(
+                    "SSH ControlMaster process exited prematurely for {}@{}",
+                    username,
+                    host
+                ));
+            }
+
+            if std::path::Path::new(&control_path).exists() {
+                info!(
+                    "🔗 ControlMaster socket ready for {}@{}: {}",
+                    username, host, control_path
+                );
+                break;
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                return Err(anyhow::anyhow!(
+                    "Timed out waiting for SSH ControlMaster socket for {}@{}",
+                    username,
+                    host
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_millis(CONTROL_SOCKET_POLL_MS)).await;
+        }
 
         Ok(())
     }
 
     async fn is_connection_active(&self, connection_id: &str) -> bool {
-        let mut connections = self.connections.write().unwrap();
-        if let Some(conn) = connections.get_mut(connection_id) {
-            if let Some(ref mut process) = conn.process {
-                // Check if process is still running
-                match process.try_wait() {
-                    Ok(Some(_)) => false, // Process has exited
-                    Ok(None) => true,     // Process is still running
-                    Err(_) => false,      // Error checking process
-                }
-            } else {
-                false
-            }
-        } else {
-            false
+        // 1. Check if the ControlMaster process is still running (synchronous helper).
+        if !self.is_process_running(connection_id) {
+            return false;
+        }
+
+        // 2. Fast path: verify the control socket file exists.
+        let control_path = control_socket_path(connection_id);
+        if !std::path::Path::new(&control_path).exists() {
+            return false;
+        }
+
+        // 3. Verify the socket is actually responsive via `ssh -O check`.
+        //    Use the synchronous helper so no lock guard crosses the await.
+        let (username, host) = match self.get_connection_hosts(connection_id) {
+            Some(h) => h,
+            None => return false,
+        };
+
+        match timeout(
+            Duration::from_secs(CONTROL_CHECK_TIMEOUT_SECS),
+            tokio::task::spawn_blocking(move || {
+                Command::new("ssh")
+                    .arg("-S")
+                    .arg(&control_path)
+                    .arg("-O")
+                    .arg("check")
+                    .arg(format!("{}@{}", username, host))
+                    .output()
+            }),
+        )
+        .await
+        {
+            Ok(Ok(Ok(output))) => output.status.success(),
+            _ => false,
         }
     }
 
-    pub async fn execute_command(&self, server: &Server, command: &str) -> Result<String> {
-        let connection_id = self.get_or_create_connection(server).await?;
+    /// Remove a connection: kill the ControlMaster process, delete the socket
+    /// file, and mark it inactive in AppState.
+    async fn remove_connection(&self, connection_id: &str, server_id: &str) {
+        // Extract the process via the synchronous helper (no lock held past here).
+        if let Some(mut proc) = self.take_connection(connection_id) {
+            let _ = proc.kill();
+        }
 
-        // Execute command using the persistent ControlMaster connection
-        let control_path = format!("/tmp/ssh_control_{}", connection_id);
+        // Remove the control socket file so future checks see a clean state.
+        let control_path = control_socket_path(connection_id);
+        let _ = std::fs::remove_file(&control_path);
+
+        self.app_state.mark_connection_inactive(server_id);
+    }
+
+    /// Execute a command through an already-established ControlMaster connection.
+    async fn run_command_through_connection(
+        &self,
+        connection_id: &str,
+        server: &Server,
+        command: &str,
+    ) -> Result<String> {
+        let control_path = control_socket_path(connection_id);
         let username = server.username.clone();
         let host = server.host.clone();
         let command = command.to_string();
@@ -308,8 +501,6 @@ impl SshConnectionManager {
         let output = output?;
 
         if !output.status.success() {
-            // Connection might be dead, mark it as inactive
-            self.app_state.mark_connection_inactive(&server.id);
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Check for common password/authentication error patterns
             if stderr.contains("Permission denied")
@@ -331,27 +522,43 @@ impl SshConnectionManager {
             return Err(anyhow::anyhow!("SSH command failed: {}", stderr));
         }
 
-        // Update last used time
-        self.app_state.update_connection_usage(&server.id);
-
         Ok(String::from_utf8(output.stdout)?)
     }
 
-    pub async fn cleanup_inactive_connections(&self) {
-        let mut connections = self.connections.write().unwrap();
-        let mut to_remove = Vec::new();
+    pub async fn execute_command(&self, server: &Server, command: &str) -> Result<String> {
+        let connection_id = self.get_or_create_connection(server).await?;
 
-        for (conn_id, conn_info) in connections.iter_mut() {
-            if let Some(ref mut process) = conn_info.process {
-                if let Ok(Some(_)) = process.try_wait() {
-                    // Process has exited
-                    to_remove.push(conn_id.clone());
-                }
+        match self
+            .run_command_through_connection(&connection_id, server, command)
+            .await
+        {
+            Ok(output) => {
+                self.app_state.update_connection_usage(&server.id);
+                Ok(output)
             }
-        }
+            Err(e) if is_connection_error(&e.to_string()) => {
+                // Connection is broken – clean it up and retry once with a fresh connection.
+                warn!(
+                    "🔄 SSH connection broken for {}, reconnecting: {}",
+                    server.id, e
+                );
+                self.remove_connection(&connection_id, &server.id).await;
 
-        for conn_id in to_remove {
-            connections.remove(&conn_id);
+                let new_connection_id = self.get_or_create_connection(server).await?;
+                let result = self
+                    .run_command_through_connection(&new_connection_id, server, command)
+                    .await?;
+                self.app_state.update_connection_usage(&server.id);
+                Ok(result)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub async fn cleanup_inactive_connections(&self) {
+        // Collect dead connections via the synchronous helper (no lock held past here).
+        for (conn_id, server_id) in self.find_dead_connections() {
+            self.remove_connection(&conn_id, &server_id).await;
         }
     }
 }
