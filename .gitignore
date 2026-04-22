@@ -1,7 +1,9 @@
-# Rust
-/target/
-**/*.rs.bk
-Cargo.lock
+# Elixir
+deps/
+_build/
+*.beam
+erl_crash.dump
+.elixir_ls/
 
 # IDE
 .vscode/

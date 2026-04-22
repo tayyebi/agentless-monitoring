@@ -1,0 +1,12 @@
+%{
+  "cowboy": {:git, "https://github.com/ninenines/cowboy.git", "3ea8395eb8f53a57acb5d3c00b99c70296e7cdbd", [tag: "2.12.0"]},
+  "cowboy_telemetry": {:git, "https://github.com/beam-telemetry/cowboy_telemetry.git", "496fcc5bf021a3135928138eb61826771d739a39", [tag: "v0.4.0"]},
+  "cowlib": {:git, "https://github.com/ninenines/cowlib.git", "1eb7f4293a652adcfe43b1835d22c58d8def839f", [tag: "2.13.0"]},
+  "jason": {:git, "https://github.com/michalmuskala/jason.git", "926d2ac6cc0271b9a7079b2ec16ae0cf802f7963", [tag: "v1.4.4"]},
+  "mime": {:git, "https://github.com/elixir-plug/mime.git", "30db90a63ca14732f9c6b9d733c89cd161451b15", [tag: "v2.0.6"]},
+  "plug": {:git, "https://github.com/elixir-plug/plug.git", "2eda50618296b1c0e5fd9d0066e382c34b28ea0a", [tag: "v1.15.3"]},
+  "plug_cowboy": {:git, "https://github.com/elixir-plug/plug_cowboy.git", "9a2873e330cd71f04918eb7c26a98ff095a000d9", [tag: "v2.7.4"]},
+  "plug_crypto": {:git, "https://github.com/elixir-plug/plug_crypto.git", "8217d4da89ce288b69533970dc4f48606a9a6fcd", [tag: "v2.1.0"]},
+  "ranch": {:git, "https://github.com/ninenines/ranch.git", "a692f44567034dacf5efcaa24a24183788594eb7", [tag: "1.8.0"]},
+  "telemetry": {:git, "https://github.com/beam-telemetry/telemetry.git", "8d8af76720856bcf26641ee1307658ad8f25e466", [tag: "v1.3.0"]},
+}
