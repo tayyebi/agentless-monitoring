@@ -101,3 +101,15 @@ jobs:
             burrito_out/agentless-monitor-linux-x86_64
             burrito_out/agentless-monitor-windows-x86_64.exe
             burrito_out/checksums.txt
+
+      - name: Upload Linux x86_64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentless-monitor-linux-x86_64
+          path: burrito_out/agentless-monitor-linux-x86_64
+
+      - name: Upload Windows x86_64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentless-monitor-windows-x86_64
+          path: burrito_out/agentless-monitor-windows-x86_64.exe
