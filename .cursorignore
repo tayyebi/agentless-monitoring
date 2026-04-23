@@ -1,9 +1,12 @@
-# Dependencies
-/target/
-Cargo.lock
+# Elixir build artifacts
+deps/
+_build/
+*.beam
+erl_crash.dump
+.elixir_ls/
 
-# Generated files
-*.rs.bk
+# Burrito single-binary output
+burrito_out/
 
 # IDE
 .vscode/

@@ -7,6 +7,7 @@ defmodule AgentlessMonitor.MixProject do
       version: "1.0.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
+      releases: releases(),
       deps: deps()
     ]
   end
@@ -18,18 +19,35 @@ defmodule AgentlessMonitor.MixProject do
     ]
   end
 
+  # Use Burrito for single-binary builds when BURRITO_TARGET is set;
+  # fall back to a standard Mix Release (e.g. for Docker images).
+  defp releases do
+    if System.get_env("BURRITO_TARGET") do
+      [
+        agentless_monitor: [
+          steps: [:assemble, &Burrito.wrap/1],
+          burrito: [targets: burrito_targets()]
+        ]
+      ]
+    else
+      [agentless_monitor: [steps: [:assemble]]]
+    end
+  end
+
+  defp burrito_targets do
+    case System.get_env("BURRITO_TARGET") do
+      "linux_x86_64" -> [linux_x86_64: [os: :linux, cpu: :x86_64]]
+      "windows_x86_64" -> [windows_x86_64: [os: :windows, cpu: :x86_64]]
+      _ -> [linux_x86_64: [os: :linux, cpu: :x86_64], windows_x86_64: [os: :windows, cpu: :x86_64]]
+    end
+  end
+
   defp deps do
     [
-      {:plug_cowboy, git: "https://github.com/elixir-plug/plug_cowboy.git", tag: "v2.7.4"},
-      {:jason, git: "https://github.com/michalmuskala/jason.git", tag: "v1.4.4"},
-      {:plug, git: "https://github.com/elixir-plug/plug.git", tag: "v1.15.3", override: true},
-      {:plug_crypto, git: "https://github.com/elixir-plug/plug_crypto.git", tag: "v2.1.0", override: true},
-      {:cowboy, git: "https://github.com/ninenines/cowboy.git", tag: "2.12.0", override: true},
-      {:cowboy_telemetry, git: "https://github.com/beam-telemetry/cowboy_telemetry.git", tag: "v0.4.0", override: true},
-      {:cowlib, git: "https://github.com/ninenines/cowlib.git", tag: "2.13.0", override: true},
-      {:ranch, git: "https://github.com/ninenines/ranch.git", tag: "1.8.0", override: true},
-      {:mime, git: "https://github.com/elixir-plug/mime.git", tag: "v2.0.6", override: true},
-      {:telemetry, git: "https://github.com/beam-telemetry/telemetry.git", tag: "v1.3.0", override: true}
+      {:plug_cowboy, "~> 2.7"},
+      {:jason, "~> 1.4"},
+      {:plug, "~> 1.15"},
+      {:burrito, "~> 1.0"}
     ]
   end
 end

@@ -8,8 +8,6 @@ services:
     volumes:
       - ./data:/app/data
       - ./config.json:/app/config.json:ro
-    environment:
-      - RUST_LOG=info
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]

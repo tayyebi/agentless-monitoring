@@ -1,61 +1,42 @@
-# Multi-stage Dockerfile for minimal binary size
-FROM rust:1.90-slim as builder
+# Multi-stage Dockerfile for Agentless Monitor (Elixir)
+FROM hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20241004-slim AS builder
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+ENV MIX_ENV=prod
 
-# Create app directory
 WORKDIR /app
 
-# Copy manifests
-COPY Cargo.toml ./
-COPY Cargo.lock* ./
+RUN mix local.hex --force && mix local.rebar --force
 
-# Copy source code
-COPY src ./src
-COPY templates ./templates
-COPY static ./static
+COPY mix.exs mix.lock ./
+RUN mix deps.get --only prod
 
-# Build the application
-RUN cargo build --release
+COPY config config/
+COPY lib lib/
+COPY templates templates/
+COPY static static/
 
-# Runtime stage
+RUN mix compile && mix release
+
+# Runtime stage – only needs ERTS (already bundled in the release)
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 ca-certificates openssh-client iputils-ping curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-# Create app directory
 WORKDIR /app
 
-# Copy the binary from builder stage
-COPY --from=builder /app/target/release/agentless-monitor /app/agentless-monitor
+COPY --from=builder --chown=appuser:appuser /app/_build/prod/rel/agentless_monitor ./
 
-# Copy static files
-COPY --from=builder /app/templates ./templates
-COPY --from=builder /app/static ./static
-
-# Create data directory
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
 
-# Switch to non-root user
 USER appuser
 
-# Expose port
 EXPOSE 8080
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/api/health || exit 1
 
-# Run the application
-CMD ["./agentless-monitor"]
+CMD ["./bin/agentless_monitor", "start"]

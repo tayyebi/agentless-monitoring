@@ -16,9 +16,15 @@ README.md
 .DS_Store
 Thumbs.db
 
-# Rust
-/target/
-Cargo.lock
+# Elixir build artifacts
+deps/
+_build/
+*.beam
+erl_crash.dump
+.elixir_ls/
+
+# Burrito single-binary output
+burrito_out/
 
 # Application data
 /data/
