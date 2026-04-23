@@ -4,7 +4,7 @@
 
 **The modern, lightweight server monitoring solution that connects via SSH without requiring any agents on your target machines.**
 
-[![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Elixir](https://img.shields.io/badge/elixir-%234B275F.svg?style=for-the-badge&logo=elixir&logoColor=white)](https://elixir-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 [![GitHub release](https://img.shields.io/github/release/tayyebi/agentless-monitoring.svg?style=for-the-badge)](https://github.com/tayyebi/agentless-monitoring/releases)
 
@@ -50,7 +50,7 @@
 
 ### Prerequisites
 
-- Rust 1.70+ (for building from source)
+- Elixir 1.14+ and Erlang/OTP 25+ (for building from source)
 - SSH access to target servers
 - Modern web browser
 
@@ -69,13 +69,13 @@
 ```bash
 # Clone the repository
 git clone https://github.com/tayyebi/agentless-monitoring.git
-cd agentless-monitor
+cd agentless-monitoring
 
-# Build the project
-cargo build --release
+# Install dependencies
+mix deps.get
 
 # Run the server
-./target/release/agentless-monitor server
+mix run --no-halt
 ```
 
 ### Configuration
@@ -201,35 +201,39 @@ curl http://localhost:8080/api/servers/prod-web-01/details/cpu
 ```bash
 # Clone repository
 git clone https://github.com/tayyebi/agentless-monitoring.git
-cd agentless-monitor
+cd agentless-monitoring
 
 # Install dependencies
-cargo build
+mix deps.get
 
 # Run in development mode
-cargo run -- server
+mix run --no-halt
 
 # Run tests
-cargo test
+mix test
 
-# Build optimized release
-cargo build --release
+# Build optimized release binary
+MIX_ENV=prod mix release
 ```
 
 ### Project Structure
 
 ```
 agentless-monitoring/
-├── src/
-│   ├── api/           # REST API endpoints
-│   ├── cli.rs         # Command-line interface
-│   ├── config.rs      # Configuration management
-│   ├── models.rs      # Data models and structures
-│   ├── monitoring.rs  # Core monitoring logic
-│   └── ssh.rs         # SSH connection handling
-├── static/            # Web assets (CSS, JS)
-├── templates/         # HTML templates
-└── docs/             # Documentation and screenshots
+├── lib/
+│   └── agentless_monitor/
+│       ├── api/           # REST API endpoints
+│       ├── application.ex # OTP application entry point
+│       ├── config.ex      # Configuration management
+│       ├── models.ex      # Data models and structures
+│       ├── monitoring/    # Core monitoring logic
+│       ├── ssh/           # SSH connection handling
+│       └── state.ex       # GenServer state management
+├── config/                # Mix configuration files
+├── static/                # Web assets (CSS, JS)
+├── templates/             # HTML templates
+├── scripts/               # Release helper scripts
+└── docs/                  # Documentation and screenshots
 ```
 
 ---
@@ -243,7 +247,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
 3. Make your changes and add tests
-4. Run tests: `cargo test`
+4. Run tests: `mix test`
 5. Commit changes: `git commit -m 'Add amazing feature'`
 6. Push to branch: `git push origin feature/amazing-feature`
 7. Open a Pull Request
@@ -268,7 +272,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- Built with [Rust](https://www.rust-lang.org/) and [Axum](https://github.com/tokio-rs/axum)
+- Built with [Elixir](https://elixir-lang.org/) and [Plug/Cowboy](https://github.com/elixir-plug/plug_cowboy)
 - UI powered by modern web technologies
 - Inspired by the need for simple, effective server monitoring
 
