@@ -333,10 +333,12 @@ defmodule AgentlessMonitor.State do
 
   defp apply_attrs(struct, attrs) do
     Enum.reduce(attrs, struct, fn {k, v}, acc ->
-      key = if is_binary(k), do: String.to_existing_atom(k), else: k
-      Map.put(acc, key, v)
-    rescue
-      _ -> acc
+      try do
+        key = if is_binary(k), do: String.to_existing_atom(k), else: k
+        Map.put(acc, key, v)
+      rescue
+        _ -> acc
+      end
     end)
   end
 end

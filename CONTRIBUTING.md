@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Agentless Monitor! This document 
 
 ### Prerequisites
 
-- Rust 1.70+ 
+- Elixir 1.14+ and Erlang/OTP 25+
 - Git
 - SSH access to test servers (for testing)
 
@@ -14,52 +14,53 @@ Thank you for your interest in contributing to Agentless Monitor! This document 
 
 1. **Fork and clone the repository**
    ```bash
-   git clone https://github.com/tayyebi/agentless-monitor.git
-   cd agentless-monitor
+   git clone https://github.com/tayyebi/agentless-monitoring.git
+   cd agentless-monitoring
    ```
 
 2. **Install dependencies**
    ```bash
-   cargo build
+   mix deps.get
    ```
 
 3. **Run tests**
    ```bash
-   cargo test
+   mix test
    ```
 
 4. **Run the application**
    ```bash
-   cargo run -- server
+   mix run --no-halt
    ```
 
 ## 🛠️ Development Guidelines
 
 ### Code Style
 
-- Follow Rust conventions and use `cargo fmt` to format code
-- Use `cargo clippy` to check for linting issues
+- Follow Elixir conventions and use `mix format` to format code
+- Use `mix credo` to check for linting issues (if configured)
 - Write meaningful commit messages
 - Add tests for new features
 
 ### Project Structure
 
 ```
-src/
-├── api/           # REST API endpoints
-├── cli.rs         # Command-line interface
-├── config.rs      # Configuration management
-├── models.rs      # Data models and structures
-├── monitoring.rs  # Core monitoring logic
-└── ssh.rs         # SSH connection handling
+lib/
+└── agentless_monitor/
+    ├── api/           # REST API endpoints
+    ├── application.ex # OTP application entry point
+    ├── config.ex      # Configuration management
+    ├── models.ex      # Data models and structures
+    ├── monitoring/    # Core monitoring logic
+    ├── ssh/           # SSH connection handling
+    └── state.ex       # GenServer state management
 ```
 
 ### Testing
 
-- Unit tests should be in the same file as the code they test
-- Integration tests should be in the `tests/` directory
-- Test SSH connections with local or test servers
-- Ensure all tests pass before submitting PR
+- Unit tests live in the `test/` directory mirroring `lib/`
+- Integration tests should cover SSH connections with local or test servers
+- Ensure all tests pass before submitting a PR: `mix test`
 
 ## 📝 Submitting Changes
 
@@ -77,9 +78,8 @@ src/
 
 3. **Test your changes**
    ```bash
-   cargo test
-   cargo clippy
-   cargo fmt -- --check
+   mix test
+   mix format --check-formatted
    ```
 
 4. **Commit your changes**
@@ -116,7 +116,7 @@ When reporting issues, please include:
 
 1. **Environment information**
    - Operating system and version
-   - Rust version (`rustc --version`)
+   - Elixir version (`elixir --version`)
    - Application version
 
 2. **Steps to reproduce**
@@ -144,11 +144,12 @@ When suggesting features:
 
 ### Core Components
 
-- **SSH Manager** (`ssh.rs`) - Handles SSH connections and command execution
-- **Monitoring Service** (`monitoring.rs`) - Collects and processes server metrics
+- **SSH Manager** (`ssh/`) - Handles SSH connections and command execution
+- **Monitoring Service** (`monitoring/`) - Collects and processes server metrics
 - **API Layer** (`api/`) - REST endpoints for the web interface
-- **Data Models** (`models.rs`) - Data structures and state management
-- **Configuration** (`config.rs`) - Application configuration and settings
+- **Data Models** (`models.ex`) - Data structures and state management
+- **Configuration** (`config.ex`) - Application configuration and settings
+- **State** (`state.ex`) - GenServer managing in-memory application state
 
 ### Key Design Principles
 
