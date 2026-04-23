@@ -410,7 +410,4 @@ defmodule AgentlessMonitor.Monitoring.Parser do
   defp pad_list(list, len, default) do
     list ++ List.duplicate(default, max(0, len - length(list)))
   end
-
-  defp max(a, b) when a >= b, do: a
-  defp max(_, b), do: b
 end

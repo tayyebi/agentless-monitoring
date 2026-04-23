@@ -2,7 +2,7 @@ defmodule AgentlessMonitor.State do
   use GenServer
   require Logger
 
-  alias AgentlessMonitor.Models.{Server, MonitoringData, MonitoringJob}
+  alias AgentlessMonitor.Models.Server
 
   @max_history 1000
 

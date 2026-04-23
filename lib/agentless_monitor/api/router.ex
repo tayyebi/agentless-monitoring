@@ -6,7 +6,6 @@ defmodule AgentlessMonitor.API.Router do
   alias AgentlessMonitor.SSH.{Connection, Manager}
   alias AgentlessMonitor.Monitoring.Service
   alias AgentlessMonitor.API.Handlers
-  alias AgentlessMonitor.Models.{Server, MonitoringData}
 
   plug(Plug.Static, at: "/static", from: "static")
 
