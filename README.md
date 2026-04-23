@@ -253,7 +253,6 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ## 📋 Roadmap
 
 - [ ] **Alert System** - Email/Slack notifications for thresholds
-- [ ] **Docker Support** - Containerized deployment options
 - [ ] **Metrics Export** - Prometheus/Grafana integration
 - [ ] **Multi-tenant** - Support for multiple users/teams
 - [ ] **Mobile App** - Native mobile applications

@@ -13,7 +13,7 @@ if [ $# -eq 0 ]; then
 fi
 
 VERSION=$1
-CURRENT_VERSION=$(grep '^version = ' Cargo.toml | cut -d'"' -f2)
+CURRENT_VERSION=$(grep 'version:' mix.exs | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
 
 echo "🚀 Creating release $VERSION"
 echo "Current version: $CURRENT_VERSION"
@@ -27,17 +27,13 @@ fi
 # Extract version number without 'v' prefix
 VERSION_NUMBER=${VERSION#v}
 
-# Update Cargo.toml version
-echo "📝 Updating Cargo.toml version to $VERSION_NUMBER"
-sed -i "s/^version = \".*\"/version = \"$VERSION_NUMBER\"/" Cargo.toml
-
-# Update any version references in README or other files
-echo "📝 Updating version references in documentation"
-# Add any other files that reference the version here
+# Update mix.exs version
+echo "📝 Updating mix.exs version to $VERSION_NUMBER"
+sed -i "s/version: \"[^\"]*\"/version: \"$VERSION_NUMBER\"/" mix.exs
 
 # Commit changes
 echo "💾 Committing version update"
-git add Cargo.toml
+git add mix.exs
 git commit -m "chore: bump version to $VERSION"
 
 # Create and push tag
