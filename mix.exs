@@ -19,19 +19,16 @@ defmodule AgentlessMonitor.MixProject do
     ]
   end
 
-  # Use Burrito for single-binary builds when BURRITO_TARGET is set;
-  # fall back to a standard Mix Release (e.g. for Docker images).
+  # Always build single-binary releases with Burrito.
+  # Set BURRITO_TARGET to select a specific target (linux_x86_64 or windows_x86_64);
+  # omit it to build all targets.
   defp releases do
-    if System.get_env("BURRITO_TARGET") do
-      [
-        agentless_monitor: [
-          steps: [:assemble, &Burrito.wrap/1],
-          burrito: [targets: burrito_targets()]
-        ]
+    [
+      agentless_monitor: [
+        steps: [:assemble, &Burrito.wrap/1],
+        burrito: [targets: burrito_targets()]
       ]
-    else
-      [agentless_monitor: [steps: [:assemble]]]
-    end
+    ]
   end
 
   defp burrito_targets do
