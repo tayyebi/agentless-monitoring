@@ -47,8 +47,48 @@ defmodule AgentlessMonitor.API.Router do
   end
 
   get "/api/connection-pool" do
+    servers = State.get_servers()
     connections = Manager.get_connections()
-    Handlers.json_response(conn, 200, %{"connections" => connections})
+    now = System.system_time(:second)
+
+    summary = %{
+      "total_servers" => length(servers),
+      "online_servers" => Enum.count(servers, &(&1.status == "online")),
+      "offline_servers" => Enum.count(servers, &(&1.status == "offline")),
+      "error_servers" => Enum.count(servers, &(&1.status == "error")),
+      "connecting_servers" => Enum.count(servers, &(&1.status == "connecting"))
+    }
+
+    ssh_connection_pool = %{
+      "active_connections" => map_size(connections),
+      "total_connections" => map_size(connections)
+    }
+
+    server_connections =
+      Enum.map(servers, fn server ->
+        last_seen_age =
+          case server.last_seen && DateTime.from_iso8601(server.last_seen) do
+            {:ok, dt, _offset} -> now - DateTime.to_unix(dt)
+            _ -> nil
+          end
+
+        %{
+          "server_name" => server.name,
+          "status" => String.capitalize(server.status),
+          "host" => server.host,
+          "username" => server.username,
+          "last_seen_age_seconds" => last_seen_age,
+          "next_monitoring_age_seconds" => max(server.next_monitoring - now, 0),
+          "monitoring_interval_seconds" => server.monitoring_interval,
+          "has_ssh_connection" => Map.has_key?(connections, server.id)
+        }
+      end)
+
+    Handlers.json_response(conn, 200, %{
+      "summary" => summary,
+      "ssh_connection_pool" => ssh_connection_pool,
+      "server_connections" => server_connections
+    })
   end
 
   # ---- Monitoring global controls ----
