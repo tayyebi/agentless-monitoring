@@ -68,7 +68,7 @@ jobs:
         run: mix deps.get --only prod
 
       - name: Build Linux x86_64 binary
-        run: MIX_ENV=prod mix release
+        run: MIX_ENV=prod mix release --overwrite
         env:
           BURRITO_TARGET: linux_x86_64
 
@@ -76,7 +76,7 @@ jobs:
         run: mv burrito_out/agentless_monitor_linux_x86_64 burrito_out/agentless-monitor-linux-x86_64
 
       - name: Build Windows x86_64 binary
-        run: MIX_ENV=prod mix release
+        run: MIX_ENV=prod mix release --overwrite
         env:
           BURRITO_TARGET: windows_x86_64
 
