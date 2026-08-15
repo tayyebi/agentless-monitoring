@@ -240,8 +240,9 @@ agentless-monitoring/
 │       ├── ssh/           # SSH connection handling
 │       └── state.ex       # GenServer state management
 ├── config/                # Mix configuration files
-├── static/                # Web assets (CSS, JS)
-├── templates/             # HTML templates
+├── priv/
+│   ├── static/            # Web assets (CSS, JS)
+│   └── templates/         # HTML templates
 ├── scripts/               # Release helper scripts
 └── docs/                  # Documentation and screenshots
 ```

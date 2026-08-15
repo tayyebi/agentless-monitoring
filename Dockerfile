@@ -16,8 +16,7 @@ RUN mix deps.get --only prod
 
 COPY config config
 COPY lib lib
-COPY static static
-COPY templates templates
+COPY priv priv
 
 RUN mix deps.compile && mix compile
 

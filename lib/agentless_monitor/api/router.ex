@@ -9,7 +9,7 @@ defmodule AgentlessMonitor.API.Router do
   alias AgentlessMonitor.Toolbox.Manager, as: ToolboxManager
   alias AgentlessMonitor.Toolbox.Registry, as: ToolboxRegistry
 
-  plug(Plug.Static, at: "/static", from: "static")
+  plug(Plug.Static, at: "/static", from: {:agentless_monitor, "priv/static"})
 
   plug(Plug.Parsers,
     parsers: [:json],
@@ -291,7 +291,7 @@ defmodule AgentlessMonitor.API.Router do
   # ---- Private ----
 
   defp serve_index(conn) do
-    path = Path.join([File.cwd!(), "templates", "index.html"])
+    path = Application.app_dir(:agentless_monitor, "priv/templates/index.html")
 
     case File.read(path) do
       {:ok, content} ->
