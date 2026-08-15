@@ -64,7 +64,17 @@
    ./agentless-monitor server
    ```
 
-#### Option 2: Build from Source
+#### Option 2: Docker Compose
+
+```bash
+git clone https://github.com/tayyebi/agentless-monitoring.git
+cd agentless-monitoring
+docker compose up -d
+```
+
+The web UI will be available at `http://localhost:4098`.
+
+#### Option 3: Build from Source
 
 ```bash
 # Clone the repository

@@ -51,7 +51,7 @@ print_status() {
 
     if pgrep -f "$APP_NAME" > /dev/null; then
         echo -e "Process:  ${GREEN}✓${NC} Running (PID: $(pgrep -f $APP_NAME | head -1))"
-        echo -e "Web UI:   ${GREEN}✓${NC} http://localhost:8080"
+        echo -e "Web UI:   ${GREEN}✓${NC} http://localhost:4098"
     else
         echo -e "Process:  ${RED}✗${NC} Not running"
     fi
@@ -139,7 +139,7 @@ setup() {
     if [ ! -f "$CONFIG_FILE" ]; then
         cat > "$CONFIG_FILE" << EOF
 {
-  "server_port": 8080,
+  "server_port": 4098,
   "log_level": "info",
   "monitoring_interval": 30,
   "ping_timeout": 5,
@@ -186,7 +186,7 @@ run() {
         setup
     fi
 
-    echo -e "${GREEN}Starting server on http://localhost:8080${NC}"
+    echo -e "${GREEN}Starting server on http://localhost:4098${NC}"
     echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
     echo ""
 
@@ -206,7 +206,7 @@ dev() {
     fi
 
     mix deps.get
-    echo -e "${GREEN}Starting development server on http://localhost:8080${NC}"
+    echo -e "${GREEN}Starting development server on http://localhost:4098${NC}"
     echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
     echo ""
 
@@ -273,28 +273,28 @@ test_app() {
     echo -e "${BLUE}Testing API endpoints...${NC}"
 
     echo -n "Health check: "
-    if curl -s http://localhost:8080/api/health > /dev/null; then
+    if curl -s http://localhost:4098/api/health > /dev/null; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗${NC}"
     fi
 
     echo -n "Servers list: "
-    if curl -s http://localhost:8080/api/servers > /dev/null; then
+    if curl -s http://localhost:4098/api/servers > /dev/null; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗${NC}"
     fi
 
     echo -n "Web interface: "
-    if curl -s http://localhost:8080/ > /dev/null; then
+    if curl -s http://localhost:4098/ > /dev/null; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗${NC}"
     fi
 
     echo -e "${GREEN}Testing complete!${NC}"
-    echo -e "Web interface: ${BLUE}http://localhost:8080${NC}"
+    echo -e "Web interface: ${BLUE}http://localhost:4098${NC}"
 }
 
 # Main

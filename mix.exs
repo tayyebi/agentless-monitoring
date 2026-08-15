@@ -27,6 +27,9 @@ defmodule AgentlessMonitor.MixProject do
       agentless_monitor: [
         steps: [:assemble, &Burrito.wrap/1],
         burrito: [targets: burrito_targets()]
+      ],
+      docker: [
+        steps: [:assemble]
       ]
     ]
   end

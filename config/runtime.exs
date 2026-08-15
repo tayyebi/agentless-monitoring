@@ -1,7 +1,7 @@
 import Config
 
 port =
-  System.get_env("MONITOR_PORT", "8080")
+  System.get_env("MONITOR_PORT", "4098")
   |> String.to_integer()
 
 config :agentless_monitor, server_port: port

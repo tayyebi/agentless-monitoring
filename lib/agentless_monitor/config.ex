@@ -5,7 +5,7 @@ defmodule AgentlessMonitor.Config do
     app_config = Application.get_all_env(:agentless_monitor)
 
     base = %{
-      server_port: Keyword.get(app_config, :server_port, 8080),
+      server_port: Keyword.get(app_config, :server_port, 4098),
       monitoring_interval: Keyword.get(app_config, :monitoring_interval, 30),
       ping_timeout: Keyword.get(app_config, :ping_timeout, 5),
       ssh_timeout: Keyword.get(app_config, :ssh_timeout, 10),

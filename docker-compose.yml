@@ -1,0 +1,15 @@
+services:
+  agentless-monitor:
+    build: .
+    ports:
+      - "${MONITOR_PORT:-4098}:4098"
+    environment:
+      MONITOR_PORT: 4098
+      SSH_CONFIG_PATH: /root/.ssh/config
+      # FALLBACK_PASSWORD:
+      # TELEGRAM_TOKEN:
+      # TELEGRAM_CHAT_ID:
+      # TELEGRAM_TOPIC_ID:
+    volumes:
+      - ~/.ssh:/root/.ssh:ro
+    restart: unless-stopped

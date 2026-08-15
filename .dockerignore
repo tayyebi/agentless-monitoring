@@ -1,0 +1,9 @@
+.git
+deps/
+_build/
+*.beam
+erl_crash.dump
+.elixir_ls/
+docs/
+data/
+*.log
