@@ -4,7 +4,7 @@ defmodule AgentlessMonitor.MixProject do
   def project do
     [
       app: :agentless_monitor,
-      version: "1.0.4",
+      version: "1.0.5",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       default_release: :agentless_monitor,
