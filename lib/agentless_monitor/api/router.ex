@@ -6,6 +6,8 @@ defmodule AgentlessMonitor.API.Router do
   alias AgentlessMonitor.SSH.{Connection, Manager}
   alias AgentlessMonitor.Monitoring.Service
   alias AgentlessMonitor.API.Handlers
+  alias AgentlessMonitor.Toolbox.Manager, as: ToolboxManager
+  alias AgentlessMonitor.Toolbox.Registry, as: ToolboxRegistry
 
   plug(Plug.Static, at: "/static", from: "static")
 
@@ -103,6 +105,31 @@ defmodule AgentlessMonitor.API.Router do
 
       {:error, :not_found} ->
         Handlers.not_found(conn)
+    end
+  end
+
+  # ---- Toolbox ----
+
+  get "/api/toolbox" do
+    Handlers.json_response(conn, 200, ToolboxRegistry.list())
+  end
+
+  post "/api/servers/:id/toolbox/:tool_id/:action" do
+    server_id = id
+    params = conn.body_params || %{}
+
+    case State.get_server(server_id) do
+      {:error, :not_found} ->
+        Handlers.not_found(conn)
+
+      {:ok, server} ->
+        case ToolboxManager.run(server, tool_id, action, params) do
+          {:ok, output} ->
+            Handlers.json_response(conn, 200, %{"status" => "ok", "output" => output})
+
+          {:error, reason} ->
+            Handlers.json_response(conn, 400, %{"status" => "error", "error" => to_string(reason)})
+        end
     end
   end
 
