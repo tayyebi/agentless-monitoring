@@ -170,7 +170,7 @@ defmodule AgentlessMonitor.Monitoring.Parser do
       parts = String.split(line)
 
       case parts do
-        [fs, size, used, avail, _pct, mount | _] ->
+        [fs, size, used, avail, pct, mount | _] ->
           [
             %DiskInfo{
               device: fs,
@@ -179,7 +179,7 @@ defmodule AgentlessMonitor.Monitoring.Parser do
               total: parse_size_string(size),
               used: parse_size_string(used),
               free: parse_size_string(avail),
-              usage_percent: parse_usage_pct(List.nth(parts, 4, "0%"))
+              usage_percent: parse_usage_pct(pct)
             }
           ]
 
