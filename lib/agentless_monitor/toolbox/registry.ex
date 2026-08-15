@@ -6,9 +6,25 @@ defmodule AgentlessMonitor.Toolbox.Registry do
   `AgentlessMonitor.Toolbox.Tool` and appending the module to `@tools`.
   """
 
-  alias AgentlessMonitor.Toolbox.Tools.{LoginNotify, AutoTriage, KeyRotation}
+  alias AgentlessMonitor.Toolbox.Tools.{
+    LoginNotify,
+    AutoTriage,
+    KeyRotation,
+    InstallGit,
+    InstallDocker,
+    InstallNodejs,
+    InstallLlmfit
+  }
 
-  @tools [LoginNotify, AutoTriage, KeyRotation]
+  @tools [
+    LoginNotify,
+    AutoTriage,
+    KeyRotation,
+    InstallGit,
+    InstallDocker,
+    InstallNodejs,
+    InstallLlmfit
+  ]
 
   def tools, do: @tools
 

@@ -10,19 +10,54 @@ defmodule AgentlessMonitor.Toolbox.Manager do
   require Logger
 
   alias AgentlessMonitor.SSH.Connection
-  alias AgentlessMonitor.Toolbox.Registry
+  alias AgentlessMonitor.Toolbox.{Registry, Resolver}
   alias AgentlessMonitor.Models.Server
 
   def run(%Server{} = server, tool_id, action, params \\ %{}) do
     with tool when not is_nil(tool) <- Registry.get(tool_id),
          true <- action in tool.actions(),
-         {:ok, script} <- tool.script(action, params) do
+         {:ok, chain} <- Resolver.resolve(tool_id),
+         {:ok, script} <- build_script(chain, tool_id, action, params) do
       execute(server, script)
     else
       nil -> {:error, "unknown tool: #{tool_id}"}
       false -> {:error, "unsupported action: #{action}"}
+      {:error, {:unknown, id}} -> {:error, "unknown prerequisite tool: #{id}"}
+      {:error, {:cycle, path}} -> {:error, "dependency cycle: #{Enum.join(path, " -> ")}"}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp build_script(chain, tool_id, action, params) do
+    prereq_ids = List.delete(chain, tool_id)
+
+    Enum.reduce_while(prereq_ids, {:ok, []}, fn id, {:ok, acc} ->
+      mod = Registry.get(id)
+
+      cond do
+        "install" not in mod.actions() ->
+          {:halt, {:error, "prerequisite #{id} does not support the \"install\" action"}}
+
+        true ->
+          case mod.script("install", %{}) do
+            {:ok, script} -> {:cont, {:ok, [segment(id, script) | acc]}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, segments} ->
+        with {:ok, final_script} <- Registry.get(tool_id).script(action, params) do
+          {:ok, Enum.join(Enum.reverse([segment(tool_id, final_script) | segments]), "\n")}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp segment(id, script) do
+    "echo '== running #{id} =='\nset -e\n" <> script
   end
 
   defp execute(%Server{id: "local"}, script) do
